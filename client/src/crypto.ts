@@ -290,6 +290,56 @@ export class CryptoManager {
   }
 
   /**
+   * Generate emoji fingerprint from a public key for visual verification
+   * Returns 6 emojis deterministically derived from the key hash
+   * Extracts encryption key from JSON if needed and normalizes before hashing
+   */
+  async generateEmojiFingerprint(publicKeyBase64: string): Promise<string> {
+    // Emoji palette - diverse, easily distinguishable emojis
+    const emojiPalette = [
+      '🔴', '🟠', '🟡', '🟢', '🔵', '🟣', '⚫', '⚪',
+      '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍',
+      '🌟', '⭐', '✨', '💫', '🌠', '🎯', '🎨', '🎭',
+      '🚀', '🛸', '🌊', '🔥', '⚡', '🌪️', '❄️', '🌈',
+      '😀', '😂', '🥰', '😎', '🤔', '😴', '🦁', '🐯',
+      '🐶', '🐱', '🐭', '🐹', '🦊', '🐻', '🐼', '🐨',
+      '🎸', '🎹', '🎺', '🎻', '🥁', '📚', '🎓', '💡'
+    ];
+
+    // Extract encryption key if this is a JSON object with {encryption, signing}
+    let keyToHash = publicKeyBase64;
+    try {
+      const parsed = JSON.parse(publicKeyBase64);
+      if (typeof parsed === 'object' && parsed.encryption) {
+        keyToHash = parsed.encryption;
+      }
+    } catch {
+      // Not JSON, use as-is
+    }
+    
+    // Hash the public key to get deterministic values
+    const publicKeyBytes = new TextEncoder().encode(keyToHash);
+    const hashBuffer = await window.crypto.subtle.digest('SHA-256', publicKeyBytes);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashStr = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
+    
+    // Debug: log first 50 chars of public key being hashed
+    console.log('[FINGERPRINT DEBUG]', 'Input key (first 50 chars):', keyToHash.substring(0, 50), '... Hash:', hashStr.substring(0, 16));
+
+    // Use chunks of the hash to select emojis
+    const selected: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const chunk = parseInt(hashStr.substring(i * 8, i * 8 + 8), 16);
+      const emojiIndex = chunk % emojiPalette.length;
+      selected.push(emojiPalette[emojiIndex]);
+    }
+
+    // Sort for easy visual comparison across devices
+    const sorted = selected.sort((a, b) => (a.codePointAt(0) ?? 0) - (b.codePointAt(0) ?? 0));
+    return sorted.join(' ');
+  }
+
+  /**
    * Check if we have a public key for a contact
    */
   hasPublicKey(contactID: string): boolean {

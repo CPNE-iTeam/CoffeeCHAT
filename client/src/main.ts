@@ -19,6 +19,8 @@ interface Contact {
   messages: Array<{ content: string; fromID: string; timestamp: number }>;
   lastMessage?: string;
   publicKey?: string;
+  publicKeyFingerprint?: string;
+  isVerified?: boolean;
   blocked?: boolean;
 }
 
@@ -29,6 +31,7 @@ class CoffeeChatClient {
   private contacts: Map<string, Contact> = new Map();
   private crypto: CryptoManager = new CryptoManager();
   private myPublicKey: string = '';
+  private myFingerprint: string = '';
 
   // DOM elements
   private statusEl: HTMLElement;
@@ -66,6 +69,13 @@ class CoffeeChatClient {
     // Initialize encryption
     this.updateStatus('Initializing encryption...', false);
     this.myPublicKey = await this.crypto.initialize();
+    console.log('[INIT] My public key (first 50 chars):', this.myPublicKey.substring(0, 50), '...');
+    this.myFingerprint = await this.crypto.generateEmojiFingerprint(this.myPublicKey);
+    console.log('[INIT] My fingerprint:', this.myFingerprint, '(from key hash)');
+    
+    // Don't display fingerprint bar - only show in system messages
+    // this.displayMyFingerprint();
+    
     this.addSystemMessage('End-to-end encryption initialized');
     this.addSystemMessage('⚠️ Session is ephemeral - all data lost on reload');
     
@@ -165,24 +175,32 @@ class CoffeeChatClient {
         break;
 
       case 'publickey':
-        // Received public key from a contact
+        // Received public key from a contact - display fingerprint for optional verification
         if (data.fromID && data.publicKey) {
+          console.log('[PUBLICKEY] Received from', data.fromID, 'key (first 50 chars):', data.publicKey.substring(0, 50), '...');
+          const fingerprint = await this.crypto.generateEmojiFingerprint(data.publicKey);
+          console.log('[PUBLICKEY] Generated fingerprint for', data.fromID, ':', fingerprint, '(should not match my own)');
+          
+          // Ensure contact exists
+          if (!this.contacts.has(data.fromID)) {
+            this.addContact(data.fromID);
+          }
+          
+          // Store the public key in the contact
+          const contact = this.contacts.get(data.fromID)!;
+          contact.publicKey = data.publicKey;
+          contact.publicKeyFingerprint = fingerprint;
+          
+          // Store public key for encryption
           await this.crypto.storePublicKey(data.fromID, data.publicKey);
           
-          // Update contact
-          const contact = this.contacts.get(data.fromID);
-          if (contact) {
-            contact.publicKey = data.publicKey;
-          }
+          // Generate combined fingerprint for verification
+          const combinedChain = this.combineFingerprints(this.myFingerprint, fingerprint);
           
-          this.addSystemMessage(`🔑 Secured connection with ${data.fromID.substring(0, 8)}...`);
-          this.addSystemMessage('✅ You can now send encrypted messages');
+          this.addSystemMessage(`🔑 Key received from ${data.fromID.substring(0, 8)}...`);
+          this.addSystemMessage(`👀 Emoji chain: ${combinedChain} - Ask if it matches theirs`);
           this.renderContactsList();
-          
-          // Update UI if this is the current chat
-          if (this.currentContactID === data.fromID) {
-            this.updateChatHeader();
-          }
+          this.updateChatHeader();
         }
         break;
 
@@ -228,11 +246,13 @@ class CoffeeChatClient {
     });
   }
 
+
   private addNewContact() {
     const contactID = this.newContactIDInput.value.trim();
     if (contactID && contactID !== this.myID) {
       this.addContact(contactID);
       this.newContactIDInput.value = '';
+      this.addSystemMessage(`Added ${contactID.substring(0, 8)}... - requesting encryption keys...`);
       
       // Request public key from this contact
       this.requestPublicKey(contactID);
@@ -288,11 +308,26 @@ class CoffeeChatClient {
       if (contact.blocked) {
         contactEl.className += ' blocked';
       }
+      if (contact.isVerified) {
+        contactEl.className += ' verified';
+      }
 
       const nameEl = document.createElement('div');
       nameEl.className = 'contact-name';
       const displayName = contact.id.substring(0, 10) + (contact.id.length > 10 ? '...' : '');
-      nameEl.textContent = contact.blocked ? `${displayName} (Blocked)` : displayName;
+      
+      let statusIndicator = '';
+      if (contact.blocked) {
+        statusIndicator = '🚫';
+      } else if (contact.isVerified) {
+        statusIndicator = '✅';
+      } else if (contact.publicKey) {
+        statusIndicator = '🔐';
+      } else {
+        statusIndicator = '⏳';
+      }
+      
+      nameEl.textContent = `${statusIndicator} ${displayName}`;
 
       const previewEl = document.createElement('div');
       previewEl.className = 'contact-preview';
@@ -338,30 +373,54 @@ class CoffeeChatClient {
 
     const contact = this.contacts.get(this.currentContactID);
     const isBlocked = contact?.blocked || false;
-    const isEncrypted = this.crypto.hasPublicKey(this.currentContactID);
+    const hasPublicKey = this.crypto.hasPublicKey(this.currentContactID);
 
     // Show block button
     this.blockBtn.style.display = 'block';
     this.blockBtn.textContent = isBlocked ? 'Unblock' : 'Block';
     this.blockBtn.className = isBlocked ? 'block-btn blocked' : 'block-btn';
 
-    // Disable input if not encrypted or if blocked
-    this.messageInput.disabled = !isEncrypted || isBlocked;
-    this.sendBtn.disabled = !isEncrypted || isBlocked;
+    // Allow messaging if not blocked (even if not verified)
+    this.messageInput.disabled = isBlocked;
+    this.sendBtn.disabled = isBlocked;
     
     if (isBlocked) {
       this.messageInput.placeholder = 'User is blocked';
-    } else if (!isEncrypted) {
-      this.messageInput.placeholder = 'Waiting for secure key exchange...';
+    } else if (!hasPublicKey) {
+      this.messageInput.placeholder = 'Requesting secure key exchange...';
     } else {
       this.messageInput.placeholder = 'Type your message...';
     }
 
-    this.currentChatInfo.innerHTML = `
-      <div>
-        <div class="chat-subtitle">${this.currentContactID}${isBlocked ? ' (Blocked)' : ''}</div>
-      </div>
+    // Build header without fingerprint display
+    let headerHTML = `
+      <div class="chat-header-content">
+        <div class="chat-subtitle">${this.currentContactID}${isBlocked ? ' 🚫' : ''}</div>
     `;
+
+    if (!hasPublicKey) {
+      headerHTML += '<div class="fingerprint-header"><span class="text-secondary">⏳ Exchanging keys...</span></div>';
+    }
+
+    headerHTML += '</div>';
+    this.currentChatInfo.innerHTML = headerHTML;
+  }
+
+
+  /**
+   * Combine two emoji fingerprints into a single sorted chain
+   * Splits both chains, combines them, and sorts for a canonical representation
+   */
+  private combineFingerprints(chain1: string, chain2: string): string {
+    // Split by spaces and combine
+    const emojis1 = chain1.split(' ').filter(e => e.length > 0);
+    const emojis2 = chain2.split(' ').filter(e => e.length > 0);
+    const combined = [...emojis1, ...emojis2];
+    
+    // Sort by Unicode code point for consistent ordering
+    const sorted = combined.sort((a, b) => (a.codePointAt(0) ?? 0) - (b.codePointAt(0) ?? 0));
+    
+    return sorted.join(' ');
   }
 
   private toggleBlockContact(contactID: string) {
@@ -399,7 +458,6 @@ class CoffeeChatClient {
       return;
     }
 
-    // Check if we have the contact's public key
     if (!this.crypto.hasPublicKey(this.currentContactID)) {
       this.addSystemMessage('Waiting for secure key exchange...');
       this.requestPublicKey(this.currentContactID);
@@ -419,13 +477,13 @@ class CoffeeChatClient {
 
       this.ws.send(JSON.stringify(message));
       
-      const contact = this.contacts.get(this.currentContactID)!;
-      contact.messages.push({
+      const updatedContact = this.contacts.get(this.currentContactID)!;
+      updatedContact.messages.push({
         content: content,
         fromID: this.myID,
         timestamp: Date.now()
       });
-      contact.lastMessage = content;
+      updatedContact.lastMessage = content;
       
       this.addMessage(content, this.myID, 'sent');
       this.renderContactsList();

@@ -82,6 +82,7 @@ wss.on('connection', (ws: CustomWebSocket) => {
                 // Store user's public key
                 if (typeof messageObj.publicKey === 'string') {
                     ws.publicKey = messageObj.publicKey;
+                    console.log('[SERVER] Stored public key for', ws.userID, '(first 50 chars):', messageObj.publicKey.substring(0, 50), '...');
                 }
                 break;
 
@@ -97,18 +98,21 @@ wss.on('connection', (ws: CustomWebSocket) => {
                 }
 
                 let keyExchangeComplete = false;
+                const relayKey = messageObj.publicKey as string;
                 wss.clients.forEach((client) => {
                     const cws = client as CustomWebSocket;
                     if (cws.readyState === WebSocket.OPEN && cws.userID === messageObj.toID) {
                         // Send requester's public key to recipient
+                        console.log('[SERVER] Relaying key from', ws.userID, 'to', cws.userID, '(first 50 chars):', relayKey.substring(0, 50), '...');
                         cws.send(JSON.stringify({
                             type: 'publickey',
                             fromID: ws.userID,
-                            publicKey: messageObj.publicKey
+                            publicKey: relayKey
                         }));
 
                         // If recipient has a public key, send it back
                         if (cws.publicKey) {
+                            console.log('[SERVER] Sending back key from', cws.userID, 'to', ws.userID, '(first 50 chars):', cws.publicKey.substring(0, 50), '...');
                             ws.send(JSON.stringify({
                                 type: 'publickey',
                                 fromID: cws.userID,
