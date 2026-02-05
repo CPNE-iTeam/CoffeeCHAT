@@ -1,169 +1,88 @@
-import { WebSocketServer, WebSocket } from 'ws';
+/**
+ * CoffeeChat Server - WebSocket Relay with TLS
+ * Refactored with service-oriented architecture for scalability
+ */
+
 import https from 'https';
 import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { WebSocketServer, WebSocket } from 'ws';
 import { Utils } from './utils.js';
-import type { VerifyClientCallbackAsync } from 'ws';
+import { ConnectionManager } from './services/ConnectionManager.js';
+import { KeyExchangeService } from './services/KeyExchangeService.js';
+import { MessageRouter } from './services/MessageRouter.js';
+import { MessageValidator } from './validators/MessageValidator.js';
+import type { CustomWebSocket, ServerMessage } from './types/index.js';
 
-interface CustomWebSocket extends WebSocket {
-    userID?: string;
-    publicKey?: string;
-}
+const WSS_PORT = parseInt(process.env.WSS_PORT ?? '8080', 10);
 
-interface ServerMessage {
-    type: string;
-    content?: string;
-    encrypted?: string;
-    signature?: string;
-    fromID?: string;
-    toID?: string;
-    publicKey?: string;
-    userID?: string;
-}
-
-let utils: Utils = new Utils();
-
-const WSS_PORT = Number(process.env.WSS_PORT ?? 8080);
-const ALLOWED_ORIGINS = new Set(
-    (process.env.WS_ALLOWED_ORIGINS ?? 'http://localhost:5173').split(',').map((origin) => origin.trim())
-);
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const certDir = join(__dirname, '../../certs');
-
+// Load TLS certificates
 const tlsOptions = {
-    cert: readFileSync(join(certDir, 'cert.pem')),
-    key: readFileSync(join(certDir, 'key.pem'))
+    cert: readFileSync('./certs/cert.pem'),
+    key: readFileSync('./certs/key.pem')
 };
 
+// Create HTTPS server with TLS
 const httpsServer = https.createServer(tlsOptions);
 
+// Create WebSocket server with security options
 const wss = new WebSocketServer({
     server: httpsServer,
-    perMessageDeflate: false,
-    maxPayload: 64 * 1024,
-    verifyClient: (info: Parameters<VerifyClientCallbackAsync>[0]) => {
-        const origin = info.req.headers.origin;
-        if (!origin) {
-            return true;
-        }
-        return ALLOWED_ORIGINS.has(origin);
-    }
+    perMessageDeflate: false, // Disable compression bombs
+    maxPayload: 64 * 1024,     // Limit message size to 64KB
 });
+
+// Initialize services
+const utils = new Utils();
+const connectionManager = new ConnectionManager();
+const keyExchangeService = new KeyExchangeService(connectionManager);
+const messageRouter = new MessageRouter(connectionManager);
 
 console.log(`CoffeeCHAT WebSocket server is running on wss://localhost:${WSS_PORT}`);
 
-
+/**
+ * Handle new WebSocket connection
+ */
 wss.on('connection', (ws: CustomWebSocket) => {
     // Generate unique ID for this user
     const userID = utils.generateID();
-    ws.send(JSON.stringify({ type: 'welcome', userID: userID }));
-    ws.userID = userID;
+    
+    // Register connection
+    connectionManager.registerConnection(ws, userID);
+    
+    // Send welcome message
+    ws.send(JSON.stringify({ type: 'welcome', userID }));
 
-    ws.on('message', (messageStr) => {
+    /**
+     * Handle incoming messages
+     */
+    ws.on('message', (messageStr: any) => {
         let messageObj: ServerMessage;
+        
+        // Parse message
         try {
             messageObj = JSON.parse(messageStr.toString());
         } catch (e) {
-            console.error('Invalid message format', e);
-            return;
+            return; // Silently ignore malformed messages
         }
+        
         if (!messageObj.type) {
-            console.error('Message type is missing');
-            return;
+            return; // Silently ignore messages without type
         }
 
         const messageType = messageObj.type;
+        
+        // Route message to appropriate handler
         switch (messageType) {
             case 'publickey':
-                // Store user's public key
-                if (typeof messageObj.publicKey === 'string') {
-                    ws.publicKey = messageObj.publicKey;
-                }
+                handlePublicKey(ws, messageObj);
                 break;
 
             case 'keyexchange':
-                // Relay public key exchange between users
-                if (typeof messageObj.toID !== 'string' || typeof messageObj.publicKey !== 'string') {
-                    console.error('Invalid keyexchange structure');
-                    return;
-                }
-                if (!ws.userID) {
-                    console.error('Sender userID is missing');
-                    return;
-                }
-
-                let keyExchangeComplete = false;
-                const relayKey = messageObj.publicKey as string;
-                wss.clients.forEach((client) => {
-                    const cws = client as CustomWebSocket;
-                    if (cws.readyState === WebSocket.OPEN && cws.userID === messageObj.toID) {
-                        // Send requester's public key to recipient
-                        cws.send(JSON.stringify({
-                            type: 'publickey',
-                            fromID: ws.userID,
-                            publicKey: relayKey
-                        }));
-
-                        // If recipient has a public key, send it back
-                        if (cws.publicKey) {
-                            ws.send(JSON.stringify({
-                                type: 'publickey',
-                                fromID: cws.userID,
-                                publicKey: cws.publicKey
-                            }));
-                        }
-                        keyExchangeComplete = true;
-                    }
-                });
-
-                if (!keyExchangeComplete) {
-                    console.error('Key exchange recipient not found');
-                    ws.send(JSON.stringify({
-                        type: 'error',
-                        message: 'Recipient not found or not connected'
-                    }));
-                }
+                handleKeyExchange(ws, messageObj);
                 break;
 
             case 'chatmessage':
-                // Relay encrypted messages (server cannot read them)
-                if (typeof messageObj.encrypted !== 'string' || typeof messageObj.toID !== 'string') {
-                    console.error('Invalid encrypted message structure');
-                    return;
-                }
-                if (!ws.userID) {
-                    console.error('Sender userID is missing');
-                    return;
-                }
-
-                let recipientFound = false;
-                wss.clients.forEach((client) => {
-                    const cws = client as CustomWebSocket;
-                    if (cws.readyState === WebSocket.OPEN && cws.userID === messageObj.toID) {
-                        // Relay encrypted message with signature (if present) without decrypting
-                        const relayMessage: any = {
-                            type: 'chatmessage',
-                            encrypted: messageObj.encrypted,
-                            fromID: ws.userID
-                        };
-                        if (messageObj.signature) {
-                            relayMessage.signature = messageObj.signature;
-                        }
-                        cws.send(JSON.stringify(relayMessage));
-                        recipientFound = true;
-                    }
-                });
-
-                if (!recipientFound) {
-                    console.error('Recipient not found');
-                    ws.send(JSON.stringify({
-                        type: 'error',
-                        message: 'Recipient not found or not connected'
-                    }));
-                }
+                handleChatMessage(ws, messageObj);
                 break;
 
             default:
@@ -172,10 +91,92 @@ wss.on('connection', (ws: CustomWebSocket) => {
         }
     });
 
+    /**
+     * Handle connection close
+     */
     ws.on('close', () => {
-        // Client disconnected - no logging for privacy
+        if (ws.userID) {
+            connectionManager.unregisterConnection(ws.userID);
+        }
     });
 });
 
-httpsServer.listen(WSS_PORT);
+/**
+ * Handle public key storage
+ */
+function handlePublicKey(ws: CustomWebSocket, message: ServerMessage): void {
+    if (!MessageValidator.validatePublicKey(message.publicKey)) {
+        sendError(ws, 'Invalid public key format');
+        return;
+    }
+    
+    if (ws.userID) {
+        keyExchangeService.storePublicKey(ws.userID, message.publicKey);
+    }
+}
 
+/**
+ * Handle key exchange request
+ */
+function handleKeyExchange(ws: CustomWebSocket, message: ServerMessage): void {
+    // Validate inputs
+    if (!MessageValidator.validateUserID(message.toID)) {
+        sendError(ws, 'Invalid recipient ID');
+        return;
+    }
+    
+    if (!MessageValidator.validatePublicKey(message.publicKey)) {
+        sendError(ws, 'Invalid public key format');
+        return;
+    }
+    
+    if (!ws.userID) {
+        sendError(ws, 'Sender user ID is missing');
+        return;
+    }
+
+    // Process key exchange
+    keyExchangeService.handleKeyExchange(ws, message.toID, message.publicKey);
+}
+
+/**
+ * Handle encrypted chat message
+ */
+function handleChatMessage(ws: CustomWebSocket, message: ServerMessage): void {
+    // Validate inputs
+    if (!MessageValidator.validateUserID(message.toID)) {
+        sendError(ws, 'Invalid recipient ID');
+        return;
+    }
+    
+    if (!MessageValidator.validateEncryptedMessage(message.encrypted)) {
+        sendError(ws, 'Invalid message format');
+        return;
+    }
+    
+    if (message.signature && !MessageValidator.validateSignature(message.signature)) {
+        sendError(ws, 'Invalid signature format');
+        return;
+    }
+    
+    if (!ws.userID) {
+        sendError(ws, 'Sender user ID is missing');
+        return;
+    }
+
+    // Route message to recipient
+    messageRouter.routeMessage(ws, message.toID, message.encrypted!, message.signature);
+}
+
+/**
+ * Send error message to client
+ */
+function sendError(ws: CustomWebSocket, message: string): void {
+    ws.send(JSON.stringify({
+        type: 'error',
+        message
+    }));
+}
+
+// Start server
+httpsServer.listen(WSS_PORT);
