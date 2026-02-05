@@ -57,8 +57,7 @@ console.log(`CoffeeCHAT WebSocket server is running on wss://localhost:${WSS_POR
 
 
 wss.on('connection', (ws: CustomWebSocket) => {
-    console.log('New connection');
-
+    // Generate unique ID for this user
     const userID = utils.generateID();
     ws.send(JSON.stringify({ type: 'welcome', userID: userID }));
     ws.userID = userID;
@@ -82,7 +81,6 @@ wss.on('connection', (ws: CustomWebSocket) => {
                 // Store user's public key
                 if (typeof messageObj.publicKey === 'string') {
                     ws.publicKey = messageObj.publicKey;
-                    console.log('[SERVER] Stored public key for', ws.userID, '(first 50 chars):', messageObj.publicKey.substring(0, 50), '...');
                 }
                 break;
 
@@ -103,7 +101,6 @@ wss.on('connection', (ws: CustomWebSocket) => {
                     const cws = client as CustomWebSocket;
                     if (cws.readyState === WebSocket.OPEN && cws.userID === messageObj.toID) {
                         // Send requester's public key to recipient
-                        console.log('[SERVER] Relaying key from', ws.userID, 'to', cws.userID, '(first 50 chars):', relayKey.substring(0, 50), '...');
                         cws.send(JSON.stringify({
                             type: 'publickey',
                             fromID: ws.userID,
@@ -112,7 +109,6 @@ wss.on('connection', (ws: CustomWebSocket) => {
 
                         // If recipient has a public key, send it back
                         if (cws.publicKey) {
-                            console.log('[SERVER] Sending back key from', cws.userID, 'to', ws.userID, '(first 50 chars):', cws.publicKey.substring(0, 50), '...');
                             ws.send(JSON.stringify({
                                 type: 'publickey',
                                 fromID: cws.userID,
@@ -171,12 +167,13 @@ wss.on('connection', (ws: CustomWebSocket) => {
                 break;
 
             default:
-                console.error('Unknown message type:', messageType);
+                // Unknown message type - silently ignore
+                break;
         }
     });
 
     ws.on('close', () => {
-        console.log(`Client disconnected`);
+        // Client disconnected - no logging for privacy
     });
 });
 

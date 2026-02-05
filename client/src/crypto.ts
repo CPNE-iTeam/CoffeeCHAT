@@ -322,9 +322,6 @@ export class CryptoManager {
     const hashBuffer = await window.crypto.subtle.digest('SHA-256', publicKeyBytes);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     const hashStr = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
-    
-    // Debug: log first 50 chars of public key being hashed
-    console.log('[FINGERPRINT DEBUG]', 'Input key (first 50 chars):', keyToHash.substring(0, 50), '... Hash:', hashStr.substring(0, 16));
 
     // Use chunks of the hash to select emojis
     const selected: string[] = [];

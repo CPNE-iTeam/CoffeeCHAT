@@ -69,9 +69,7 @@ class CoffeeChatClient {
     // Initialize encryption
     this.updateStatus('Initializing encryption...', false);
     this.myPublicKey = await this.crypto.initialize();
-    console.log('[INIT] My public key (first 50 chars):', this.myPublicKey.substring(0, 50), '...');
     this.myFingerprint = await this.crypto.generateEmojiFingerprint(this.myPublicKey);
-    console.log('[INIT] My fingerprint:', this.myFingerprint, '(from key hash)');
     
     // Don't display fingerprint bar - only show in system messages
     // this.displayMyFingerprint();
@@ -106,12 +104,11 @@ class CoffeeChatClient {
         const data: ChatMessage = JSON.parse(event.data);
         this.handleMessage(data);
       } catch (error) {
-        console.error('Failed to parse message:', error);
+        // Silently ignore malformed messages
       }
     };
 
-    this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
+    this.ws.onerror = () => {
       this.addSystemMessage('Connection error occurred');
     };
 
@@ -137,7 +134,6 @@ class CoffeeChatClient {
             // Check if user is blocked
             const contact = this.contacts.get(data.fromID);
             if (contact?.blocked) {
-              console.log('Ignoring message from blocked user:', data.fromID);
               return;
             }
 
@@ -168,8 +164,7 @@ class CoffeeChatClient {
             
             this.renderContactsList();
           } catch (error) {
-            console.error('Failed to decrypt/verify message:', error);
-            this.addSystemMessage(`Failed to process message from ${data.fromID}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            this.addSystemMessage(`⚠️ Failed to process message - encryption error`);
           }
         }
         break;
@@ -177,9 +172,7 @@ class CoffeeChatClient {
       case 'publickey':
         // Received public key from a contact - display fingerprint for optional verification
         if (data.fromID && data.publicKey) {
-          console.log('[PUBLICKEY] Received from', data.fromID, 'key (first 50 chars):', data.publicKey.substring(0, 50), '...');
           const fingerprint = await this.crypto.generateEmojiFingerprint(data.publicKey);
-          console.log('[PUBLICKEY] Generated fingerprint for', data.fromID, ':', fingerprint, '(should not match my own)');
           
           // Ensure contact exists
           if (!this.contacts.has(data.fromID)) {
@@ -489,8 +482,7 @@ class CoffeeChatClient {
       this.renderContactsList();
       this.messageInput.value = '';
     } catch (error) {
-      console.error('Failed to encrypt message:', error);
-      this.addSystemMessage('Failed to encrypt message');
+      this.addSystemMessage('⚠️ Failed to send message');
     }
   }
 
