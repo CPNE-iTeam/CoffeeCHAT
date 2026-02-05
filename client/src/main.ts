@@ -5,6 +5,7 @@ interface ChatMessage {
   type: string;
   content?: string;
   encrypted?: string;
+  signature?: string;
   fromID?: string;
   toID?: string;
   userID?: string;
@@ -73,7 +74,9 @@ class CoffeeChatClient {
 
   private connect() {
     this.updateStatus('Connecting...', false);
-    this.ws = new WebSocket('ws://localhost:8080');
+    const wsPort = import.meta.env.VITE_WSS_PORT ?? '8080';
+    const wsHost = window.location.hostname || 'localhost';
+    this.ws = new WebSocket(`wss://${wsHost}:${wsPort}`);
 
     this.ws.onopen = () => {
       this.updateStatus('Connected', true);
@@ -128,8 +131,14 @@ class CoffeeChatClient {
               return;
             }
 
-            // Decrypt the message
-            const decryptedContent = await this.crypto.decryptMessage(data.fromID, data.encrypted);
+            // Verify signature and decrypt the message
+            let decryptedContent: string;
+            if (data.signature) {
+              decryptedContent = await this.crypto.decryptAndVerify(data.fromID, data.encrypted, data.signature);
+            } else {
+              // Fallback for unsigned messages (backwards compatibility)
+              decryptedContent = await this.crypto.decryptMessage(data.fromID, data.encrypted);
+            }
             
             if (!this.contacts.has(data.fromID)) {
               this.addContact(data.fromID);
@@ -149,8 +158,8 @@ class CoffeeChatClient {
             
             this.renderContactsList();
           } catch (error) {
-            console.error('Failed to decrypt message:', error);
-            this.addSystemMessage(`Failed to decrypt message from ${data.fromID}`);
+            console.error('Failed to decrypt/verify message:', error);
+            this.addSystemMessage(`Failed to process message from ${data.fromID}: ${error instanceof Error ? error.message : 'Unknown error'}`);
           }
         }
         break;
@@ -398,12 +407,13 @@ class CoffeeChatClient {
     }
 
     try {
-      // Encrypt the message
-      const encrypted = await this.crypto.encryptMessage(this.currentContactID, content);
+      // Encrypt and sign the message
+      const { encrypted, signature } = await this.crypto.encryptAndSign(this.currentContactID, content);
 
       const message: ChatMessage = {
         type: 'chatmessage',
         encrypted: encrypted,
+        signature: signature,
         toID: this.currentContactID
       };
 

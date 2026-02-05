@@ -6,14 +6,16 @@
 
 export class CryptoManager {
   private keyPair: CryptoKeyPair | null = null;
+  private signingKeyPair: CryptoKeyPair | null = null;
   private publicKeyCache: Map<string, CryptoKey> = new Map();
+  private signingPublicKeyCache: Map<string, CryptoKey> = new Map();
   private sharedSecretCache: Map<string, CryptoKey> = new Map();
 
   /**
-   * Initialize crypto by generating ECDH key pair
+   * Initialize crypto by generating ECDH and ECDSA key pairs
    */
   async initialize(): Promise<string> {
-    // Generate ECDH key pair (P-256 curve)
+    // Generate ECDH key pair (P-256 curve) for encryption
     this.keyPair = await window.crypto.subtle.generateKey(
       {
         name: 'ECDH',
@@ -23,8 +25,22 @@ export class CryptoManager {
       ['deriveKey', 'deriveBits']
     );
 
-    // Export public key as base64
-    return await this.exportPublicKey(this.keyPair.publicKey);
+    // Generate ECDSA key pair (P-256 curve) for signing
+    this.signingKeyPair = await window.crypto.subtle.generateKey(
+      {
+        name: 'ECDSA',
+        namedCurve: 'P-256',
+      },
+      true, // extractable
+      ['sign', 'verify']
+    );
+
+    // Export both public keys as base64
+    const encryptionKey = await this.exportPublicKey(this.keyPair.publicKey);
+    const signingKey = await this.exportPublicKey(this.signingKeyPair.publicKey);
+
+    // Return both keys as JSON
+    return JSON.stringify({ encryption: encryptionKey, signing: signingKey });
   }
 
   /**
@@ -69,14 +85,47 @@ export class CryptoManager {
   }
 
   /**
-   * Store a contact's public key
+   * Store a contact's public keys (encryption and signing)
    */
-  async storePublicKey(contactID: string, publicKeyBase64: string): Promise<void> {
-    const publicKey = await this.importPublicKey(publicKeyBase64);
-    this.publicKeyCache.set(contactID, publicKey);
-    
-    // Derive shared secret immediately
-    await this.deriveSharedSecret(contactID);
+  async storePublicKey(contactID: string, publicKeyJson: string): Promise<void> {
+    try {
+      const keys = JSON.parse(publicKeyJson);
+      const publicKey = await this.importPublicKey(keys.encryption);
+      const signingKey = await this.importSigningPublicKey(keys.signing);
+      
+      this.publicKeyCache.set(contactID, publicKey);
+      this.signingPublicKeyCache.set(contactID, signingKey);
+      
+      // Derive shared secret immediately
+      await this.deriveSharedSecret(contactID);
+    } catch {
+      // Fallback for old format (single base64 string)
+      const publicKey = await this.importPublicKey(publicKeyJson);
+      this.publicKeyCache.set(contactID, publicKey);
+      await this.deriveSharedSecret(contactID);
+    }
+  }
+
+  /**
+   * Import signing public key from base64 string
+   */
+  private async importSigningPublicKey(base64Key: string): Promise<CryptoKey> {
+    const binaryString = atob(base64Key);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    return await window.crypto.subtle.importKey(
+      'spki',
+      bytes.buffer,
+      {
+        name: 'ECDSA',
+        namedCurve: 'P-256',
+      },
+      true,
+      ['verify']
+    );
   }
 
   /**
@@ -178,6 +227,69 @@ export class CryptoManager {
   }
 
   /**
+   * Sign a message with our private key
+   */
+  async signMessage(encryptedMessage: string): Promise<string> {
+    if (!this.signingKeyPair) {
+      throw new Error('Signing key not initialized');
+    }
+
+    const signature = await window.crypto.subtle.sign(
+      {
+        name: 'ECDSA',
+        hash: 'SHA-256',
+      },
+      this.signingKeyPair.privateKey,
+      new TextEncoder().encode(encryptedMessage)
+    );
+
+    return btoa(String.fromCharCode(...new Uint8Array(signature)));
+  }
+
+  /**
+   * Encrypt a message AND sign it
+   */
+  async encryptAndSign(contactID: string, plaintext: string): Promise<{ encrypted: string; signature: string }> {
+    const encrypted = await this.encryptMessage(contactID, plaintext);
+    const signature = await this.signMessage(encrypted);
+
+    return { encrypted, signature };
+  }
+
+  /**
+   * Verify and decrypt a signed message
+   */
+  async decryptAndVerify(contactID: string, encrypted: string, signature: string): Promise<string> {
+    const signingKey = this.signingPublicKeyCache.get(contactID);
+    if (!signingKey) {
+      throw new Error(`No signing key for contact: ${contactID}`);
+    }
+
+    // Verify signature
+    const signatureBytes = new Uint8Array(
+      atob(signature)
+        .split('')
+        .map((c) => c.charCodeAt(0))
+    );
+
+    const isValid = await window.crypto.subtle.verify(
+      {
+        name: 'ECDSA',
+        hash: 'SHA-256',
+      },
+      signingKey,
+      signatureBytes,
+      new TextEncoder().encode(encrypted)
+    );
+
+    if (!isValid) {
+      throw new Error('Message signature invalid - message may have been tampered with');
+    }
+
+    return this.decryptMessage(contactID, encrypted);
+  }
+
+  /**
    * Check if we have a public key for a contact
    */
   hasPublicKey(contactID: string): boolean {
@@ -189,6 +301,7 @@ export class CryptoManager {
    */
   clearCache(): void {
     this.publicKeyCache.clear();
+    this.signingPublicKeyCache.clear();
     this.sharedSecretCache.clear();
   }
 }

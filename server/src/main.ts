@@ -1,5 +1,10 @@
 import { WebSocketServer, WebSocket } from 'ws';
+import https from 'https';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { Utils } from './utils.js';
+import type { VerifyClientCallbackAsync } from 'ws';
 
 interface CustomWebSocket extends WebSocket {
     userID?: string;
@@ -10,6 +15,7 @@ interface ServerMessage {
     type: string;
     content?: string;
     encrypted?: string;
+    signature?: string;
     fromID?: string;
     toID?: string;
     publicKey?: string;
@@ -18,11 +24,36 @@ interface ServerMessage {
 
 let utils: Utils = new Utils();
 
-const WSS_PORT = 8080;
+const WSS_PORT = Number(process.env.WSS_PORT ?? 8080);
+const ALLOWED_ORIGINS = new Set(
+    (process.env.WS_ALLOWED_ORIGINS ?? 'http://localhost:5173').split(',').map((origin) => origin.trim())
+);
 
-const wss = new WebSocketServer({ port: WSS_PORT });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const certDir = join(__dirname, '../../certs');
 
-console.log(`CoffeeCHAT WebSocket server is running on ws://localhost:${WSS_PORT}`);
+const tlsOptions = {
+    cert: readFileSync(join(certDir, 'cert.pem')),
+    key: readFileSync(join(certDir, 'key.pem'))
+};
+
+const httpsServer = https.createServer(tlsOptions);
+
+const wss = new WebSocketServer({
+    server: httpsServer,
+    perMessageDeflate: false,
+    maxPayload: 64 * 1024,
+    verifyClient: (info: Parameters<VerifyClientCallbackAsync>[0]) => {
+        const origin = info.req.headers.origin;
+        if (!origin) {
+            return true;
+        }
+        return ALLOWED_ORIGINS.has(origin);
+    }
+});
+
+console.log(`CoffeeCHAT WebSocket server is running on wss://localhost:${WSS_PORT}`);
 
 
 wss.on('connection', (ws: CustomWebSocket) => {
@@ -112,12 +143,16 @@ wss.on('connection', (ws: CustomWebSocket) => {
                 wss.clients.forEach((client) => {
                     const cws = client as CustomWebSocket;
                     if (cws.readyState === WebSocket.OPEN && cws.userID === messageObj.toID) {
-                        // Relay encrypted message without decrypting
-                        cws.send(JSON.stringify({
+                        // Relay encrypted message with signature (if present) without decrypting
+                        const relayMessage: any = {
                             type: 'chatmessage',
                             encrypted: messageObj.encrypted,
                             fromID: ws.userID
-                        }));
+                        };
+                        if (messageObj.signature) {
+                            relayMessage.signature = messageObj.signature;
+                        }
+                        cws.send(JSON.stringify(relayMessage));
                         recipientFound = true;
                     }
                 });
@@ -140,4 +175,6 @@ wss.on('connection', (ws: CustomWebSocket) => {
         console.log(`Client disconnected`);
     });
 });
+
+httpsServer.listen(WSS_PORT);
 
