@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CoffeeCHAT!</title>
+  <script type="module" defer src="/src/main.ts"></script>
+</head>
+
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>☕ CoffeeCHAT</h1>
+        <div class="status">
+          <span id="status" class="disconnected">Connecting...</span>
+        </div>
+      </div>
+
+      <div class="my-id-section">
+        <label>Your ID:</label>
+        <div class="user-id-container">
+          <span id="myID" class="user-id">-</span>
+          <button id="copyBtn" class="copy-btn" title="Copy ID">📋</button>
+        </div>
+      </div>
+
+      <div class="add-contact-section">
+        <input type="text" id="newContactID" placeholder="Enter user ID" />
+        <button id="addContactBtn" title="Add Contact">➕</button>
+      </div>
+
+      <div class="contacts-header">
+        <h2>Contacts</h2>
+      </div>
+
+      <div id="contactsList" class="contacts-list"></div>
+    </aside>
+
+    <main class="chat-main">
+      <div class="chat-header">
+        <div id="currentChatInfo" class="current-chat-info">
+          <span class="chat-title">Select a contact to start chatting</span>
+        </div>
+        <button id="blockBtn" class="block-btn" style="display: none;">Block</button>
+      </div>
+
+      <div id="messages" class="messages-container"></div>
+
+      <div class="input-area">
+        <input type="text" id="messageInput" placeholder="Type your message..." />
+        <button id="sendBtn">Send</button>
+      </div>
+    </main>
+  </div>
+</body>
+
+</html>
