@@ -71,7 +71,7 @@ function checkRateLimit(ws: CustomWebSocket): boolean {
  */
 wss.on('connection', (ws: CustomWebSocket) => {
     // Generate unique ID for this user
-    const userID = utils.generateID();
+    const userID = utils.generateUniqueID((id) => connectionManager.isUserConnected(id));
     
     // Register connection
     connectionManager.registerConnection(ws, userID);
