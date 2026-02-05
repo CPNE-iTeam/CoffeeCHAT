@@ -16,6 +16,7 @@ export interface ServerMessage {
 export interface CustomWebSocket extends WebSocket {
   userID?: string;
   publicKey?: string;
+  isAlive?: boolean;
 }
 
 export interface ConnectionInfo {

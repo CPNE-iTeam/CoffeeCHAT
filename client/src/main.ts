@@ -59,6 +59,7 @@ class CoffeeChatClient {
 
     // Setup UI event handlers
     this.setupEventListeners();
+    this.setupSecurityHandlers();
 
     // Initialize encryption
     this.chatUI.updateStatus('Initializing encryption...', false);
@@ -179,6 +180,22 @@ class CoffeeChatClient {
       navigator.clipboard.writeText(this.myID).then(() => {
         this.chatUI.addSystemMessage('Your ID copied to clipboard');
       });
+    });
+  }
+
+  private setupSecurityHandlers(): void {
+    window.addEventListener('beforeunload', () => {
+      this.messageService.clearCache();
+      this.contactService.clear();
+      this.chatUI.clearMessages();
+      this.myPublicKey = '';
+      this.myFingerprint = '';
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.chatUI.clearMessageInput();
+      }
     });
   }
 

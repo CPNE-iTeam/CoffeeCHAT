@@ -39,6 +39,33 @@ const messageRouter = new MessageRouter(connectionManager);
 
 console.log(`CoffeeCHAT WebSocket server is running on wss://localhost:${WSS_PORT}`);
 
+// Basic rate limiting (token bucket)
+const RATE_LIMIT_TOKENS = 10;
+const RATE_LIMIT_INTERVAL_MS = 10_000;
+const rateLimiters = new WeakMap<CustomWebSocket, { tokens: number; lastRefill: number }>();
+
+function checkRateLimit(ws: CustomWebSocket): boolean {
+    const now = Date.now();
+    const state = rateLimiters.get(ws);
+    if (!state) {
+        rateLimiters.set(ws, { tokens: RATE_LIMIT_TOKENS - 1, lastRefill: now });
+        return true;
+    }
+
+    const elapsed = now - state.lastRefill;
+    if (elapsed >= RATE_LIMIT_INTERVAL_MS) {
+        state.tokens = RATE_LIMIT_TOKENS;
+        state.lastRefill = now;
+    }
+
+    if (state.tokens <= 0) {
+        return false;
+    }
+
+    state.tokens -= 1;
+    return true;
+}
+
 /**
  * Handle new WebSocket connection
  */
@@ -48,14 +75,35 @@ wss.on('connection', (ws: CustomWebSocket) => {
     
     // Register connection
     connectionManager.registerConnection(ws, userID);
+    rateLimiters.set(ws, { tokens: RATE_LIMIT_TOKENS, lastRefill: Date.now() });
     
     // Send welcome message
     ws.send(JSON.stringify({ type: 'welcome', userID }));
+
+    // Connection timeout handling (heartbeat)
+    ws.isAlive = true;
+    ws.on('pong', () => {
+        ws.isAlive = true;
+    });
+
+    const pingInterval = setInterval(() => {
+        if (ws.isAlive === false) {
+            ws.terminate();
+            return;
+        }
+        ws.isAlive = false;
+        ws.ping();
+    }, 30_000);
 
     /**
      * Handle incoming messages
      */
     ws.on('message', (messageStr: any) => {
+        if (!checkRateLimit(ws)) {
+            sendError(ws, 'Rate limited');
+            return;
+        }
+
         let messageObj: ServerMessage;
         
         // Parse message
@@ -95,6 +143,7 @@ wss.on('connection', (ws: CustomWebSocket) => {
      * Handle connection close
      */
     ws.on('close', () => {
+        clearInterval(pingInterval);
         if (ws.userID) {
             connectionManager.unregisterConnection(ws.userID);
         }
@@ -105,14 +154,17 @@ wss.on('connection', (ws: CustomWebSocket) => {
  * Handle public key storage
  */
 function handlePublicKey(ws: CustomWebSocket, message: ServerMessage): void {
+    if (!ws.userID) {
+        sendError(ws, 'Sender user ID is missing');
+        return;
+    }
+
     if (!MessageValidator.validatePublicKey(message.publicKey)) {
         sendError(ws, 'Invalid public key format');
         return;
     }
-    
-    if (ws.userID) {
-        keyExchangeService.storePublicKey(ws.userID, message.publicKey);
-    }
+
+    keyExchangeService.storePublicKey(ws.userID, message.publicKey);
 }
 
 /**
