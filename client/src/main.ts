@@ -75,7 +75,7 @@ class CoffeeChatClient {
 
   private connect(): void {
     const wsPort = import.meta.env.VITE_WSS_PORT ?? '8080';
-    const wsHost = window.location.hostname || 'localhost';
+    const wsHost = import.meta.env.VITE_WSS_URL ?? (window.location.hostname || 'localhost');
     const wsURL = `wss://${wsHost}:${wsPort}`;
     
     this.wsService.connect(wsURL);
