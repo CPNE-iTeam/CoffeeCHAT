@@ -570,7 +570,6 @@ h1 {
   gap: 6px;
 }
 
-
 .chat-header-content {
   min-height: 50px;
   display: flex;
@@ -628,8 +627,6 @@ h1 {
   opacity: 1;
 }
 
-
-
 /* Contact list verified indicator */
 .contact-item.verified {
   border-left: 4px solid var(--success);
@@ -671,4 +668,116 @@ h1 {
   .chat-main {
     width: 100%;
   }
+}
+
+/* ==================== Privacy Mode ==================== */
+
+/* Privacy mode toggle button */
+.privacy-toggle {
+  background: transparent;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: all 0.3s;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.privacy-toggle:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.privacy-toggle.active {
+  background: rgba(233, 69, 96, 0.2);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.privacy-toggle .icon {
+  font-size: 18px;
+}
+
+.privacy-toggle .label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* Privacy mode indicator in header */
+.privacy-indicator {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(233, 69, 96, 0.2);
+  border-radius: 20px;
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 500;
+  margin-left: 12px;
+}
+
+.privacy-mode .privacy-indicator {
+  display: inline-flex;
+}
+
+/* Message content blurring in privacy mode */
+.privacy-mode .message:not(.system) .message-content {
+  filter: blur(8px);
+  transition: filter 0.2s ease;
+  cursor: pointer;
+  user-select: none;
+}
+
+.privacy-mode .message:not(.system):hover .message-content,
+.privacy-mode .message:not(.system):focus-within .message-content {
+  filter: blur(0);
+  user-select: text;
+}
+
+/* Contact list message preview blurring */
+.privacy-mode .contact-preview {
+  filter: blur(4px);
+  transition: filter 0.2s ease;
+}
+
+.privacy-mode .contact-item:hover .contact-preview {
+  filter: blur(0);
+}
+
+/* Tooltip hint for blurred messages */
+.privacy-mode .message:not(.system)::after {
+  content: '👁 Hover to reveal';
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.2s;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.privacy-mode .message:not(.system):not(:hover)::after {
+  opacity: 0.7;
+}
+
+.privacy-mode .message {
+  position: relative;
+}
+
+/* Input field blurring (optional extra security) */
+.privacy-mode #messageInput:not(:focus) {
+  filter: blur(4px);
+}
+
+.privacy-mode #messageInput:focus {
+  filter: blur(0);
 }

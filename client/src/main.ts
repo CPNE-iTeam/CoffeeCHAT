@@ -9,6 +9,7 @@ import { WebSocketService } from './services/WebSocketService';
 import { ContactService } from './services/ContactService';
 import { MessageService } from './services/MessageService';
 import { NotificationService } from './services/NotificationService';
+import { PrivacyModeService } from './services/PrivacyModeService';
 import { ChatUI } from './ui/ChatUI';
 import { ContactListUI } from './ui/ContactListUI';
 import type { ChatMessage } from './types';
@@ -24,6 +25,7 @@ class CoffeeChatClient {
   private contactService: ContactService;
   private messageService: MessageService;
   private notificationService: NotificationService;
+  private privacyModeService: PrivacyModeService;
 
   // UI Components
   private chatUI: ChatUI;
@@ -36,6 +38,7 @@ class CoffeeChatClient {
     this.contactService = new ContactService();
     this.messageService = new MessageService(this.crypto, this.wsService);
     this.notificationService = new NotificationService();
+    this.privacyModeService = new PrivacyModeService();
 
     // Initialize UI components
     this.chatUI = new ChatUI();
@@ -190,7 +193,6 @@ class CoffeeChatClient {
     // Show push notification for key exchange
     this.notificationService.showKeyExchangeNotification(data.fromID);
   }
-
   private setupEventListeners(): void {
     // Send message handler
     this.chatUI.onSendMessage(() => this.sendMessage());
@@ -212,6 +214,50 @@ class CoffeeChatClient {
         this.chatUI.addSystemMessage('Your ID copied to clipboard');
       });
     });
+
+    // Privacy mode toggle handler
+    this.setupPrivacyMode();
+  }
+
+  private setupPrivacyMode(): void {
+    const privacyToggle = document.getElementById('privacyToggle');
+    
+    if (privacyToggle) {
+      // Initialize UI state
+      this.privacyModeService.initialize();
+      this.updatePrivacyToggleUI(privacyToggle, this.privacyModeService.isEnabled());
+
+      // Toggle on click
+      privacyToggle.addEventListener('click', () => {
+        const isEnabled = this.privacyModeService.toggle();
+        this.updatePrivacyToggleUI(privacyToggle, isEnabled);
+        
+        if (isEnabled) {
+          this.chatUI.addSystemMessage('🙈 Privacy Mode ON - Messages hidden until hover');
+        } else {
+          this.chatUI.addSystemMessage('🐵 Privacy Mode OFF - Messages visible');
+        }
+      });
+
+      // Listen for changes (e.g., keyboard shortcut in the future)
+      this.privacyModeService.onChange((isEnabled) => {
+        this.updatePrivacyToggleUI(privacyToggle, isEnabled);
+      });
+    }
+  }
+
+  private updatePrivacyToggleUI(button: HTMLElement, isEnabled: boolean): void {
+    const icon = button.querySelector('.icon');
+    
+    if (isEnabled) {
+      button.classList.add('active');
+      button.title = 'Disable Privacy Mode';
+      if (icon) icon.textContent = '🙈';
+    } else {
+      button.classList.remove('active');
+      button.title = 'Enable Privacy Mode';
+      if (icon) icon.textContent = '🐵';
+    }
   }
 
   private setupSecurityHandlers(): void {

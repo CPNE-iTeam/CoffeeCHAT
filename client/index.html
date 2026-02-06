@@ -16,13 +16,14 @@
         <div class="status">
           <span id="status" class="disconnected">Connecting...</span>
         </div>
-      </div>
-
-      <div class="my-id-section">
+      </div>      <div class="my-id-section">
         <label>Your ID:</label>
         <div class="user-id-container">
           <span id="myID" class="user-id">-</span>
           <button id="copyBtn" class="copy-btn" title="Copy ID">📋</button>
+          <button id="privacyToggle" class="privacy-toggle" title="Toggle Privacy Mode">
+            <span class="icon">🙈</span>
+          </button>
         </div>
       </div>
 
@@ -36,13 +37,12 @@
       </div>
 
       <div id="contactsList" class="contacts-list"></div>
-    </aside>
-
-    <main class="chat-main">
+    </aside>    <main class="chat-main">
       <div class="chat-header">
         <div id="currentChatInfo" class="current-chat-info">
           <span class="chat-title">Select a contact to start chatting</span>
         </div>
+        <span class="privacy-indicator">🙈 Privacy Mode</span>
         <button id="blockBtn" class="block-btn" style="display: none;">Block</button>
       </div>
 
