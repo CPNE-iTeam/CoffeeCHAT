@@ -8,6 +8,7 @@ import { CryptoManager } from './crypto';
 import { WebSocketService } from './services/WebSocketService';
 import { ContactService } from './services/ContactService';
 import { MessageService } from './services/MessageService';
+import { NotificationService } from './services/NotificationService';
 import { ChatUI } from './ui/ChatUI';
 import { ContactListUI } from './ui/ContactListUI';
 import type { ChatMessage } from './types';
@@ -22,6 +23,7 @@ class CoffeeChatClient {
   private wsService: WebSocketService;
   private contactService: ContactService;
   private messageService: MessageService;
+  private notificationService: NotificationService;
 
   // UI Components
   private chatUI: ChatUI;
@@ -33,6 +35,7 @@ class CoffeeChatClient {
     this.wsService = new WebSocketService();
     this.contactService = new ContactService();
     this.messageService = new MessageService(this.crypto, this.wsService);
+    this.notificationService = new NotificationService();
 
     // Initialize UI components
     this.chatUI = new ChatUI();
@@ -59,9 +62,7 @@ class CoffeeChatClient {
 
     // Setup UI event handlers
     this.setupEventListeners();
-    this.setupSecurityHandlers();
-
-    // Initialize encryption
+    this.setupSecurityHandlers();    // Initialize encryption
     this.chatUI.updateStatus('Initializing encryption...', false);
     this.myPublicKey = await this.crypto.initialize();
     this.myFingerprint = await this.messageService.generateFingerprint(this.myPublicKey);
@@ -69,8 +70,23 @@ class CoffeeChatClient {
     this.chatUI.addSystemMessage('End-to-end encryption initialized');
     this.chatUI.addSystemMessage('⚠️ Session is ephemeral - all data lost on reload');
 
+    // Request notification permission
+    await this.initializeNotifications();
+
     // Connect to server
     this.connect();
+  }
+
+  private async initializeNotifications(): Promise<void> {
+    const permission = await this.notificationService.requestPermission();
+    
+    if (permission === 'granted') {
+      this.chatUI.addSystemMessage('🔔 Notifications enabled');
+    } else if (permission === 'denied') {
+      this.chatUI.addSystemMessage('🔕 Notifications blocked - enable in browser settings for message alerts');
+    } else {
+      this.chatUI.addSystemMessage('🔔 Enable notifications to receive message alerts');
+    }
   }
 
   private connect(): void {
@@ -110,31 +126,43 @@ class CoffeeChatClient {
         }
         break;
     }
-  }
-
-  private async handleChatMessage(data: ChatMessage): Promise<void> {
+  }  private async handleChatMessage(data: ChatMessage): Promise<void> {
     if (!data.fromID || !data.encrypted) return;
 
-    const contact = this.contactService.getContact(data.fromID);
+    const senderID = data.fromID; // Capture for use in callback
+    const contact = this.contactService.getContact(senderID);
     if (contact?.blocked) return;
 
     try {
       const decryptedContent = await this.messageService.decryptMessage(
-        data.fromID,
+        senderID,
         data.encrypted,
         data.signature
       );
 
-      this.contactService.addMessage(data.fromID, decryptedContent, data.fromID);
+      this.contactService.addMessage(senderID, decryptedContent, senderID);
 
-      if (this.contactService.getCurrentContactID() === data.fromID) {
+      if (this.contactService.getCurrentContactID() === senderID) {
         this.chatUI.addMessage(decryptedContent, 'received');
       }
+
+      // Show push notification for new messages
+      this.notificationService.showMessageNotification(
+        senderID,
+        decryptedContent,
+        () => {
+          // Switch to the sender's chat when notification is clicked
+          this.contactService.setCurrentContact(senderID);
+          const senderContact = this.contactService.getContact(senderID);
+          if (senderContact) {
+            this.chatUI.renderMessages(senderContact, this.myID);
+          }
+        }
+      );
     } catch (error) {
       this.chatUI.addSystemMessage(`⚠️ Failed to process message - encryption error`);
     }
   }
-
   private async handlePublicKey(data: ChatMessage): Promise<void> {
     if (!data.fromID || !data.publicKey) return;
 
@@ -158,6 +186,9 @@ class CoffeeChatClient {
 
     this.chatUI.addSystemMessage(`🔑 Key received from ${data.fromID.substring(0, 8)}...`);
     this.chatUI.addSystemMessage(`👀 Emoji chain: ${combinedChain} - Ask if it matches theirs`);
+
+    // Show push notification for key exchange
+    this.notificationService.showKeyExchangeNotification(data.fromID);
   }
 
   private setupEventListeners(): void {
