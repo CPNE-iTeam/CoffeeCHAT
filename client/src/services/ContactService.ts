@@ -2,7 +2,7 @@
  * Contact management service
  */
 
-import type { Contact } from '../types';
+import type { Contact, ContentType } from '../types';
 
 export class ContactService {
   private contacts: Map<string, Contact> = new Map();
@@ -53,15 +53,17 @@ export class ContactService {
   /**
    * Add message to contact's history
    */
-  addMessage(contactID: string, content: string, fromID: string): void {
+  addMessage(contactID: string, content: string, fromID: string, contentType: ContentType = 'text'): void {
     const contact = this.getContact(contactID);
     if (contact) {
       contact.messages.push({
         content,
         fromID,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        contentType
       });
-      contact.lastMessage = content;
+      // For images, show placeholder text in contact list
+      contact.lastMessage = contentType === 'image' ? '🖼️ Image' : content;
       this.notifyChange();
     }
   }

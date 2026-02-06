@@ -272,11 +272,14 @@ h1 {
 }
 
 .contact-preview {
-  font-size: 12px;
+  font-size: 16px;
   color: var(--text-secondary);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .contacts-list:empty::before {
@@ -487,9 +490,6 @@ h1 {
   color: var(--bg-primary);
 }
 
-/* ransform: translateY(0);
-}
-
 #sendBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -557,17 +557,6 @@ h1 {
   opacity: 0.7;
   text-align: center;
   padding: 0 10px;
-}
-
-.contact-preview {
-  font-size: 16px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .chat-header-content {
@@ -780,4 +769,162 @@ h1 {
 
 .privacy-mode #messageInput:focus {
   filter: blur(0);
+}
+
+/* ==================== Image Messages ==================== */
+
+/* Image button in input area */
+.image-btn {
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all 0.3s;
+  flex-shrink: 0;
+}
+
+.image-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.05);
+}
+
+.image-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Image message container */
+.image-message-container {
+  position: relative;
+  max-width: 300px;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg-primary);
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-message-container::before {
+  content: '⏳';
+  position: absolute;
+  font-size: 24px;
+  opacity: 0.5;
+}
+
+.image-message-container.loaded::before {
+  display: none;
+}
+
+/* Message image */
+.message-image {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.2s, opacity 0.3s;
+  opacity: 0;
+}
+
+.image-message-container.loaded .message-image {
+  opacity: 1;
+}
+
+.message-image:hover {
+  transform: scale(1.02);
+}
+
+/* Image error state */
+.image-error {
+  color: var(--accent);
+  font-size: 13px;
+  padding: 20px;
+  text-align: center;
+}
+
+/* Image in sent message */
+.message.sent .image-message-container {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* Image in received message */
+.message.received .image-message-container {
+  background: var(--bg-secondary);
+}
+
+/* Fullscreen image modal */
+.image-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.95);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  animation: fadeIn 0.2s ease;
+  padding: 20px;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.image-modal img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 10px 50px rgba(0, 0, 0, 0.5);
+}
+
+.image-modal-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: white;
+  font-size: 24px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-modal-close:hover {
+  background: var(--accent);
+  transform: scale(1.1);
+}
+
+/* Privacy mode: blur images too */
+.privacy-mode .message:not(.system) .message-image {
+  filter: blur(20px);
+  transition: filter 0.2s ease;
+}
+
+.privacy-mode .message:not(.system):hover .message-image {
+  filter: blur(0);
+}
+
+/* Responsive image sizing */
+@media (max-width: 600px) {
+  .image-message-container {
+    max-width: 200px;
+  }
+  
+  .message-image {
+    max-height: 250px;
+  }
 }

@@ -28,7 +28,7 @@ const httpsServer = https.createServer(tlsOptions);
 const wss = new WebSocketServer({
     server: httpsServer,
     perMessageDeflate: false, // Disable compression bombs
-    maxPayload: 64 * 1024,     // Limit message size to 64KB
+    maxPayload: 10 * 1024 * 1024,  // Limit message size to 10MB (for encrypted images)
 });
 
 // Initialize services

@@ -184,14 +184,26 @@ export class CryptoManager {
       },
       sharedSecret,
       encoder.encode(plaintext)
-    );
-
-    // Combine IV + ciphertext and encode as base64
+    );    // Combine IV + ciphertext and encode as base64
     const combined = new Uint8Array(iv.length + encrypted.byteLength);
     combined.set(iv, 0);
     combined.set(new Uint8Array(encrypted), iv.length);
 
-    return btoa(String.fromCharCode(...combined));
+    return this.uint8ArrayToBase64(combined);
+  }
+
+  /**
+   * Convert Uint8Array to base64 string (handles large arrays)
+   */
+  private uint8ArrayToBase64(bytes: Uint8Array): string {
+    // Use chunks to avoid "too many arguments" error with spread operator
+    const chunkSize = 0x8000; // 32KB chunks
+    let result = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+      result += String.fromCharCode(...chunk);
+    }
+    return btoa(result);
   }
 
   /**

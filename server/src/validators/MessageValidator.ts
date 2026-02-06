@@ -35,15 +35,13 @@ export class MessageValidator {
     // Alphanumeric, hyphens, underscores only
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) return false;
     return true;
-  }
-
-  /**
+  }  /**
    * Validate encrypted message
    */
   static validateEncryptedMessage(encrypted: unknown): encrypted is string {
     if (typeof encrypted !== 'string') return false;
-    if (encrypted.length === 0 || encrypted.length > 100000) return false; // Max 100KB
-    return this.isValidBase64(encrypted);
+    if (encrypted.length === 0 || encrypted.length > 10 * 1024 * 1024) return false; // Max 10MB for images
+    return this.isValidBase64LargePayload(encrypted);
   }
 
   /**
@@ -53,13 +51,33 @@ export class MessageValidator {
     if (typeof signature !== 'string') return false;
     return this.isValidBase64(signature);
   }
-
   /**
-   * Check if string is valid base64
+   * Check if string is valid base64 (for small payloads like keys/signatures)
    */
   private static isValidBase64(str: string): boolean {
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(str)) return false;
     if (str.length < 20 || str.length > 10000) return false;
+    return true;
+  }
+
+  /**
+   * Check if string is valid base64 (for any size payload)
+   */
+  private static isValidBase64LargePayload(str: string): boolean {
+    if (str.length < 20) return false;
+    
+    // For small messages (under 10KB), do full validation
+    if (str.length <= 10000) {
+      return /^[A-Za-z0-9+/]*={0,2}$/.test(str);
+    }
+    
+    // For large payloads, check start and end to avoid slow regex on multi-MB strings
+    const start = str.substring(0, Math.min(1000, str.length));
+    const end = str.substring(Math.max(0, str.length - 100));
+    
+    if (!/^[A-Za-z0-9+/]+$/.test(start)) return false;
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(end)) return false;
+    
     return true;
   }
 

@@ -15,11 +15,17 @@ export interface ChatMessage {
   requestingUserID?: string;
   timestamp?: number;
   nonce?: string;
+  contentType?: 'text' | 'image';  // Message content type
 }
 
 export interface Contact {
   id: string;
-  messages: Array<{ content: string; fromID: string; timestamp: number }>;
+  messages: Array<{
+    content: string;
+    fromID: string;
+    timestamp: number;
+    contentType?: 'text' | 'image';
+  }>;
   lastMessage?: string;
   publicKey?: string;
   publicKeyFingerprint?: string;
@@ -33,3 +39,4 @@ export interface EncryptedMessage {
 }
 
 export type MessageType = 'sent' | 'received' | 'system';
+export type ContentType = 'text' | 'image';

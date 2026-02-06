@@ -10,9 +10,10 @@ import { ContactService } from './services/ContactService';
 import { MessageService } from './services/MessageService';
 import { NotificationService } from './services/NotificationService';
 import { PrivacyModeService } from './services/PrivacyModeService';
+import { ImageService } from './services/ImageService';
 import { ChatUI } from './ui/ChatUI';
 import { ContactListUI } from './ui/ContactListUI';
-import type { ChatMessage } from './types';
+import type { ChatMessage, ContentType } from './types';
 
 class CoffeeChatClient {
   private myID: string = '';
@@ -26,6 +27,7 @@ class CoffeeChatClient {
   private messageService: MessageService;
   private notificationService: NotificationService;
   private privacyModeService: PrivacyModeService;
+  private imageService: ImageService;
 
   // UI Components
   private chatUI: ChatUI;
@@ -39,6 +41,7 @@ class CoffeeChatClient {
     this.messageService = new MessageService(this.crypto, this.wsService);
     this.notificationService = new NotificationService();
     this.privacyModeService = new PrivacyModeService();
+    this.imageService = new ImageService();
 
     // Initialize UI components
     this.chatUI = new ChatUI();
@@ -143,16 +146,19 @@ class CoffeeChatClient {
         data.signature
       );
 
-      this.contactService.addMessage(senderID, decryptedContent, senderID);
+      // Determine content type
+      const contentType: ContentType = this.imageService.isImageMessage(decryptedContent) ? 'image' : 'text';
+
+      this.contactService.addMessage(senderID, decryptedContent, senderID, contentType);
 
       if (this.contactService.getCurrentContactID() === senderID) {
-        this.chatUI.addMessage(decryptedContent, 'received');
+        this.chatUI.addMessage(decryptedContent, 'received', contentType);
       }
 
       // Show push notification for new messages
       this.notificationService.showMessageNotification(
         senderID,
-        decryptedContent,
+        contentType === 'image' ? '🖼️ Image' : decryptedContent,
         () => {
           // Switch to the sender's chat when notification is clicked
           this.contactService.setCurrentContact(senderID);
@@ -192,10 +198,15 @@ class CoffeeChatClient {
 
     // Show push notification for key exchange
     this.notificationService.showKeyExchangeNotification(data.fromID);
-  }
-  private setupEventListeners(): void {
+  }  private setupEventListeners(): void {
     // Send message handler
     this.chatUI.onSendMessage(() => this.sendMessage());
+
+    // Send image handler
+    this.chatUI.onSendImage(() => this.sendImage());
+
+    // Paste image handler (Ctrl+V)
+    this.chatUI.onPasteImage((file) => this.sendImageFromFile(file));
 
     // Block contact handler
     this.chatUI.onBlockContact(() => {
@@ -311,7 +322,6 @@ class CoffeeChatClient {
       this.chatUI.renderMessages(contact, this.myID);
     }
   }
-
   private async sendMessage(): Promise<void> {
     const content = this.chatUI.getMessageInput().trim();
     const currentContactID = this.contactService.getCurrentContactID();
@@ -329,11 +339,96 @@ class CoffeeChatClient {
     try {
       await this.messageService.sendEncryptedMessage(currentContactID, content);
       
-      this.contactService.addMessage(currentContactID, content, this.myID);
-      this.chatUI.addMessage(content, 'sent');
+      this.contactService.addMessage(currentContactID, content, this.myID, 'text');
+      this.chatUI.addMessage(content, 'sent', 'text');
       this.chatUI.clearMessageInput();
     } catch (error) {
       this.chatUI.addSystemMessage('⚠️ Failed to send message');
+    }
+  }
+
+  private async sendImage(): Promise<void> {
+    const currentContactID = this.contactService.getCurrentContactID();
+
+    if (!currentContactID) {
+      this.chatUI.addSystemMessage('Select a contact first');
+      return;
+    }
+
+    const contact = this.contactService.getContact(currentContactID);
+    if (!contact || contact.blocked) return;
+
+    if (!this.messageService.hasPublicKey(currentContactID)) {
+      this.chatUI.addSystemMessage('Waiting for key exchange...');
+      return;
+    }
+
+    try {
+      // Open image picker and process image
+      const processedImage = await this.imageService.selectImage();
+      
+      if (!processedImage) {
+        return; // User cancelled
+      }
+
+      this.chatUI.addSystemMessage('📤 Encrypting and sending image...');
+
+      // Wrap image as message content
+      const imageContent = this.imageService.wrapImageAsMessage(processedImage.dataUrl);
+
+      // Send encrypted image
+      await this.messageService.sendEncryptedMessage(currentContactID, imageContent);
+      
+      // Add to local history
+      this.contactService.addMessage(currentContactID, imageContent, this.myID, 'image');
+      this.chatUI.addMessage(imageContent, 'sent', 'image');      const savings = Math.round((1 - processedImage.compressedSize / processedImage.originalSize) * 100);
+      this.chatUI.addSystemMessage(`✅ Image sent (${Math.round(processedImage.compressedSize / 1024)}KB${savings > 0 ? `, ${savings}% compressed` : ''})`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.chatUI.addSystemMessage(`⚠️ Failed to send image: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Send an image from a File object (used for paste support)
+   */
+  private async sendImageFromFile(file: File): Promise<void> {
+    const currentContactID = this.contactService.getCurrentContactID();
+
+    if (!currentContactID) {
+      this.chatUI.addSystemMessage('Select a contact first');
+      return;
+    }
+
+    const contact = this.contactService.getContact(currentContactID);
+    if (!contact || contact.blocked) return;
+
+    if (!this.messageService.hasPublicKey(currentContactID)) {
+      this.chatUI.addSystemMessage('Waiting for key exchange...');
+      return;
+    }
+
+    try {
+      // Process the pasted image
+      const processedImage = await this.imageService.processImage(file);
+
+      this.chatUI.addSystemMessage('📤 Encrypting and sending pasted image...');
+
+      // Wrap image as message content
+      const imageContent = this.imageService.wrapImageAsMessage(processedImage.dataUrl);
+
+      // Send encrypted image
+      await this.messageService.sendEncryptedMessage(currentContactID, imageContent);
+
+      // Add to local history
+      this.contactService.addMessage(currentContactID, imageContent, this.myID, 'image');
+      this.chatUI.addMessage(imageContent, 'sent', 'image');
+
+      const savings = Math.round((1 - processedImage.compressedSize / processedImage.originalSize) * 100);
+      this.chatUI.addSystemMessage(`✅ Image sent (${Math.round(processedImage.compressedSize / 1024)}KB${savings > 0 ? `, ${savings}% compressed` : ''})`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.chatUI.addSystemMessage(`⚠️ Failed to send image: ${errorMessage}`);
     }
   }
 

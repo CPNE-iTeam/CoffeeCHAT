@@ -2,7 +2,8 @@
  * Chat UI management
  */
 
-import type { Contact, MessageType } from '../types';
+import type { Contact, MessageType, ContentType } from '../types';
+import { ImageService } from '../services/ImageService';
 
 export class ChatUI {
   private statusEl: HTMLElement;
@@ -12,6 +13,11 @@ export class ChatUI {
   private messageInput: HTMLInputElement;
   private sendBtn: HTMLButtonElement;
   private blockBtn: HTMLButtonElement;
+  private imageBtn: HTMLButtonElement | null = null;
+  private imageService: ImageService;
+
+  // Track blob URLs for cleanup
+  private activeBlobUrls: Set<string> = new Set();
 
   constructor() {
     this.statusEl = document.getElementById('status') as HTMLElement;
@@ -21,6 +27,8 @@ export class ChatUI {
     this.messageInput = document.getElementById('messageInput') as HTMLInputElement;
     this.sendBtn = document.getElementById('sendBtn') as HTMLButtonElement;
     this.blockBtn = document.getElementById('blockBtn') as HTMLButtonElement;
+    this.imageBtn = document.getElementById('imageBtn') as HTMLButtonElement;
+    this.imageService = new ImageService();
   }
 
   /**
@@ -37,7 +45,6 @@ export class ChatUI {
   updateMyID(userID: string): void {
     this.myIDEl.textContent = userID;
   }
-
   /**
    * Update chat header
    */
@@ -50,6 +57,7 @@ export class ChatUI {
       this.currentChatInfo.innerHTML = '<span class="chat-title">Select a contact to start chatting</span>';
       this.messageInput.disabled = true;
       this.sendBtn.disabled = true;
+      this.setImageButtonEnabled(false);
       this.blockBtn.style.display = 'none';
       return;
     }
@@ -60,8 +68,10 @@ export class ChatUI {
     this.blockBtn.className = isBlocked ? 'block-btn blocked' : 'block-btn';
 
     // Update input state
+    const canSend = !isBlocked && hasPublicKey;
     this.messageInput.disabled = isBlocked;
     this.sendBtn.disabled = isBlocked;
+    this.setImageButtonEnabled(canSend);
 
     if (isBlocked) {
       this.messageInput.placeholder = 'User is blocked';
@@ -83,21 +93,94 @@ export class ChatUI {
     headerHTML += '</div>';
     this.currentChatInfo.innerHTML = headerHTML;
   }
-
   /**
    * Add message to chat
    */
-  addMessage(content: string, type: MessageType): void {
+  addMessage(content: string, type: MessageType, contentType: ContentType = 'text'): void {
     const messageEl = document.createElement('div');
     messageEl.className = `message ${type}`;
 
     const contentEl = document.createElement('div');
     contentEl.className = 'message-content';
-    contentEl.textContent = content;
+
+    if (contentType === 'image' && this.imageService.isImageMessage(content)) {
+      // Handle image message
+      const imageData = this.imageService.extractImageData(content);
+      if (imageData) {
+        try {
+          const blobUrl = this.imageService.createSecureBlobUrl(imageData);
+          this.activeBlobUrls.add(blobUrl);
+
+          const imgContainer = document.createElement('div');
+          imgContainer.className = 'image-message-container';
+
+          const img = document.createElement('img');
+          img.className = 'message-image';
+          img.src = blobUrl;
+          img.alt = 'Encrypted image';
+          img.loading = 'lazy';
+          
+          // Click to view full size
+          img.addEventListener('click', () => this.showImageModal(blobUrl));
+
+          // Add loading state
+          img.addEventListener('load', () => {
+            imgContainer.classList.add('loaded');
+          });
+
+          img.addEventListener('error', () => {
+            imgContainer.innerHTML = '<span class="image-error">⚠️ Failed to load image</span>';
+          });
+
+          imgContainer.appendChild(img);
+          contentEl.appendChild(imgContainer);
+        } catch {
+          contentEl.innerHTML = '<span class="image-error">⚠️ Invalid image data</span>';
+        }
+      }
+    } else {
+      // Regular text message
+      contentEl.textContent = content;
+    }
 
     messageEl.appendChild(contentEl);
     this.messagesContainer.appendChild(messageEl);
     this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+  }
+
+  /**
+   * Show image in fullscreen modal
+   */
+  private showImageModal(imageUrl: string): void {
+    const modal = document.createElement('div');
+    modal.className = 'image-modal';
+    
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.alt = 'Full size image';
+    
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'image-modal-close';
+    closeBtn.innerHTML = '✕';
+    closeBtn.addEventListener('click', () => modal.remove());
+
+    // Close on backdrop click
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    // Close on Escape key
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        modal.remove();
+        document.removeEventListener('keydown', handleEscape);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+
+    modal.appendChild(img);
+    modal.appendChild(closeBtn);
+    document.body.appendChild(modal);
   }
 
   /**
@@ -106,11 +189,14 @@ export class ChatUI {
   addSystemMessage(content: string): void {
     this.addMessage(content, 'system');
   }
-
   /**
    * Clear all messages
    */
   clearMessages(): void {
+    // Revoke all blob URLs to free memory
+    this.activeBlobUrls.forEach(url => this.imageService.revokeBlobUrl(url));
+    this.activeBlobUrls.clear();
+    
     this.messagesContainer.innerHTML = '';
   }
 
@@ -122,7 +208,8 @@ export class ChatUI {
     
     contact.messages.forEach((msg) => {
       const type = msg.fromID === myID ? 'sent' : 'received';
-      this.addMessage(msg.content, type);
+      const contentType = msg.contentType || 'text';
+      this.addMessage(msg.content, type, contentType);
     });
   }
 
@@ -139,7 +226,6 @@ export class ChatUI {
   clearMessageInput(): void {
     this.messageInput.value = '';
   }
-
   /**
    * Setup event listeners
    */
@@ -152,6 +238,50 @@ export class ChatUI {
         handler();
       }
     });
+  }
+  /**
+   * Setup image button listener
+   */
+  onSendImage(handler: () => void): void {
+    if (this.imageBtn) {
+      this.imageBtn.addEventListener('click', handler);
+    }
+  }
+  /**
+   * Setup paste image listener
+   * Allows users to paste images from clipboard (Ctrl+V)
+   */
+  onPasteImage(handler: (file: File) => void): void {
+    // Single document-level listener to avoid duplicate handling
+    document.addEventListener('paste', (e: ClipboardEvent) => {
+      // Skip if focus is in contact input
+      const target = e.target as HTMLElement;
+      if (target.id === 'newContactID') return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          e.stopPropagation();
+          const file = item.getAsFile();
+          if (file) {
+            handler(file);
+          }
+          return;
+        }
+      }
+    });
+  }
+
+  /**
+   * Enable/disable image button
+   */
+  setImageButtonEnabled(enabled: boolean): void {
+    if (this.imageBtn) {
+      this.imageBtn.disabled = !enabled;
+    }
   }
 
   /**
