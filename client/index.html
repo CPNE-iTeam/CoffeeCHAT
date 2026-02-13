@@ -24,9 +24,7 @@
             <span class="icon">🙈</span>
           </button>
         </div>
-      </div>
-
-      <div class="find-user-section">
+      </div>      <div class="find-user-section">
         <input type="text" id="findUsernameInput" placeholder="Find by username..." />
         <button id="findUserBtn" title="Find User">🔍</button>
       </div>
@@ -36,7 +34,33 @@
       </div>
 
       <div id="contactsList" class="contacts-list"></div>
-    </aside>    <main class="chat-main">
+
+      <div class="groups-header">
+        <h2>Groups</h2>
+        <button id="createGroupBtn" class="create-group-btn" title="Create Group">➕</button>
+      </div>
+
+      <div id="groupsList" class="groups-list"></div>
+
+      <!-- Group Creation Modal -->
+      <div id="createGroupModal" class="modal" style="display: none;">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Create Group</h3>
+            <button id="closeGroupModal" class="close-modal-btn">✕</button>
+          </div>
+          <div class="modal-body">
+            <label>Group Name:</label>
+            <input type="text" id="groupNameInput" placeholder="Enter group name..." maxlength="32" />
+            <label>Select Members:</label>
+            <div id="memberSelectionList" class="member-selection-list"></div>
+          </div>
+          <div class="modal-footer">
+            <button id="confirmCreateGroup" class="confirm-btn">Create Group</button>
+          </div>
+        </div>
+      </div>
+    </aside><main class="chat-main">
       <div class="chat-header">
         <div id="currentChatInfo" class="current-chat-info">
           <span class="chat-title">Select a contact to start chatting</span>

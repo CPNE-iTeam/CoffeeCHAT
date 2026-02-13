@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="coffeeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8B4513"/>
+      <stop offset="100%" style="stop-color:#D2691E"/>
+    </linearGradient>
+  </defs>
+  <!-- Cup -->
+  <path d="M20 35 L20 75 Q20 85 30 85 L60 85 Q70 85 70 75 L70 35 Z" fill="url(#coffeeGrad)"/>
+  <!-- Handle -->
+  <path d="M70 40 Q85 40 85 55 Q85 70 70 70" fill="none" stroke="#8B4513" stroke-width="6" stroke-linecap="round"/>
+  <!-- Steam -->
+  <path d="M30 25 Q35 15 30 5" fill="none" stroke="#888" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <path d="M45 25 Q50 15 45 5" fill="none" stroke="#888" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <path d="M60 25 Q65 15 60 5" fill="none" stroke="#888" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <!-- Coffee surface -->
+  <ellipse cx="45" cy="40" rx="22" ry="6" fill="#3d1f0d"/>
+</svg>

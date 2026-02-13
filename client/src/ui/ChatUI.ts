@@ -85,6 +85,29 @@ export class ChatUI {
     headerHTML += '</div>';
     this.currentChatInfo.innerHTML = headerHTML;
   }
+
+  /**
+   * Update chat header for group view
+   */
+  updateGroupHeader(groupName: string, memberCount: number): void {
+    // Hide block button in group view
+    this.blockBtn.style.display = 'none';
+
+    // Enable messaging in groups
+    this.messageInput.disabled = false;
+    this.sendBtn.disabled = false;
+    this.setImageButtonEnabled(true);
+    this.messageInput.placeholder = 'Type your message...';
+
+    const headerHTML = `
+      <div class="chat-header-content">
+        <div class="chat-title">${groupName}</div>
+        <div class="chat-subtitle">${memberCount} members</div>
+      </div>
+    `;
+    this.currentChatInfo.innerHTML = headerHTML;
+  }
+
   /**
    * Add message to chat
    */
@@ -181,6 +204,64 @@ export class ChatUI {
   addSystemMessage(content: string): void {
     this.addMessage(content, 'system');
   }
+
+  /**
+   * Add group message to chat with sender info
+   */
+  addGroupMessage(content: string, fromID: string, fromUsername: string, type: MessageType, contentType: ContentType = 'text'): void {
+    const messageEl = document.createElement('div');
+    messageEl.className = `message ${type}`;
+
+    // Add sender info for received messages
+    if (type === 'received') {
+      const senderEl = document.createElement('div');
+      senderEl.className = 'message-sender';
+      senderEl.textContent = fromUsername || fromID.substring(0, 8);
+      messageEl.appendChild(senderEl);
+    }
+
+    const contentEl = document.createElement('div');
+    contentEl.className = 'message-content';
+
+    if (contentType === 'image' && this.imageService.isImageMessage(content)) {
+      // Handle image message
+      const imageData = this.imageService.extractImageData(content);
+      if (imageData) {
+        try {
+          const blobUrl = this.imageService.createSecureBlobUrl(imageData);
+          this.activeBlobUrls.add(blobUrl);
+
+          const imgContainer = document.createElement('div');
+          imgContainer.className = 'image-message-container';
+
+          const img = document.createElement('img');
+          img.className = 'message-image';
+          img.src = blobUrl;
+          img.alt = 'Encrypted image';
+          img.loading = 'lazy';
+          
+          img.addEventListener('click', () => this.showImageModal(blobUrl));
+          img.addEventListener('load', () => imgContainer.classList.add('loaded'));
+          img.addEventListener('error', () => {
+            imgContainer.innerHTML = '<span class="image-error">⚠️ Failed to load image</span>';
+          });
+
+          imgContainer.appendChild(img);
+          contentEl.appendChild(imgContainer);
+        } catch {
+          contentEl.innerHTML = '<span class="image-error">⚠️ Invalid image data</span>';
+        }
+      }
+    } else {
+      // Regular text message
+      contentEl.textContent = content;
+    }
+
+    messageEl.appendChild(contentEl);
+    this.messagesContainer.appendChild(messageEl);
+    this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+  }
+
   /**
    * Clear all messages
    */

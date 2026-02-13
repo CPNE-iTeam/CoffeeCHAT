@@ -10,6 +10,7 @@ import { Utils } from './utils.js';
 import { ConnectionManager } from './services/ConnectionManager.js';
 import { KeyExchangeService } from './services/KeyExchangeService.js';
 import { MessageRouter } from './services/MessageRouter.js';
+import { GroupRouter } from './services/GroupRouter.js';
 import { MessageValidator } from './validators/MessageValidator.js';
 import type { CustomWebSocket, ServerMessage } from './types/index.js';
 
@@ -28,7 +29,7 @@ const httpsServer = https.createServer(tlsOptions);
 const wss = new WebSocketServer({
     server: httpsServer,
     perMessageDeflate: false, // Disable compression bombs
-    maxPayload: 10 * 1024 * 1024,  // Limit message size to 10MB (for encrypted images)
+    maxPayload: 16 * 1024 * 1024,  // Limit message size to 16MB (for encrypted images with base64 overhead)
 });
 
 // Initialize services
@@ -36,6 +37,7 @@ const utils = new Utils();
 const connectionManager = new ConnectionManager();
 const keyExchangeService = new KeyExchangeService(connectionManager);
 const messageRouter = new MessageRouter(connectionManager);
+const groupRouter = new GroupRouter(connectionManager);
 
 console.log(`CoffeeCHAT WebSocket server is running on wss://localhost:${WSS_PORT}`);
 
@@ -134,19 +136,23 @@ wss.on('connection', (ws: CustomWebSocket) => {
 
             case 'setusername':
                 handleSetUsername(ws, messageObj);
+                break;            case 'finduser':
+                handleFindUser(ws, messageObj);
                 break;
 
-            case 'finduser':
-                handleFindUser(ws, messageObj);
+            case 'creategroup':
+                handleCreateGroup(ws, messageObj);
+                break;
+
+            case 'groupmessage':
+                handleGroupMessage(ws, messageObj);
                 break;
 
             default:
                 // Unknown message type - silently ignore
                 break;
         }
-    });
-
-    /**
+    });    /**
      * Handle connection close
      */
     ws.on('close', () => {
@@ -154,6 +160,18 @@ wss.on('connection', (ws: CustomWebSocket) => {
         if (ws.userID) {
             connectionManager.unregisterConnection(ws.userID);
         }
+    });
+
+    /**
+     * Handle WebSocket errors (e.g., payload too large)
+     */
+    ws.on('error', (error: Error & { code?: string }) => {
+        if (error.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
+            sendError(ws, 'Message too large. Max size is 10MB.');
+        } else {
+            console.error(`WebSocket error for ${ws.userID}:`, error.message);
+        }
+        // Don't crash - let the close handler clean up
     });
 });
 
@@ -276,6 +294,87 @@ function handleFindUser(ws: CustomWebSocket, message: ServerMessage): void {
         usernameHash: message.usernameHash,
         userID: userID || null  // null if not found
     }));
+}
+
+/**
+ * Handle group creation - route to all members
+ */
+function handleCreateGroup(ws: CustomWebSocket, message: ServerMessage): void {
+    if (!ws.userID) {
+        sendError(ws, 'User ID is missing');
+        return;
+    }
+
+    if (!message.groupID || typeof message.groupID !== 'string' || message.groupID.length < 10) {
+        sendError(ws, 'Invalid group ID');
+        return;
+    }
+
+    if (!message.groupName || typeof message.groupName !== 'string' || message.groupName.length < 1) {
+        sendError(ws, 'Invalid group name');
+        return;
+    }
+
+    if (!Array.isArray(message.memberIDs) || message.memberIDs.length < 2) {
+        sendError(ws, 'Group must have at least 2 members');
+        return;
+    }
+
+    // Validate all member IDs
+    for (const memberID of message.memberIDs) {
+        if (!MessageValidator.validateUserID(memberID)) {
+            sendError(ws, 'Invalid member ID');
+            return;
+        }
+    }
+
+    // Route group creation to all members
+    groupRouter.routeGroupCreation(
+        ws,
+        message.groupID,
+        message.groupName,
+        message.memberIDs,
+        ws.userID
+    );
+}
+
+/**
+ * Handle group message - route encrypted payloads to recipients
+ */
+function handleGroupMessage(ws: CustomWebSocket, message: ServerMessage): void {
+    if (!ws.userID) {
+        sendError(ws, 'User ID is missing');
+        return;
+    }
+
+    if (!message.groupID || typeof message.groupID !== 'string') {
+        sendError(ws, 'Invalid group ID');
+        return;
+    }
+
+    if (!Array.isArray(message.encryptedPayloads) || message.encryptedPayloads.length === 0) {
+        sendError(ws, 'Invalid encrypted payloads');
+        return;
+    }
+
+    // Validate each payload
+    for (const payload of message.encryptedPayloads) {
+        if (!MessageValidator.validateUserID(payload.toID)) {
+            sendError(ws, 'Invalid recipient ID in payload');
+            return;
+        }
+        if (!MessageValidator.validateEncryptedMessage(payload.encrypted)) {
+            sendError(ws, 'Invalid encrypted message in payload');
+            return;
+        }
+        if (!MessageValidator.validateSignature(payload.signature)) {
+            sendError(ws, 'Invalid signature in payload');
+            return;
+        }
+    }
+
+    // Route to all recipients
+    groupRouter.routeGroupMessage(ws, message.groupID, message.encryptedPayloads);
 }
 
 // Start server

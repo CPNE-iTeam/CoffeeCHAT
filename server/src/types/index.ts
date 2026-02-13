@@ -12,6 +12,16 @@ export interface ServerMessage {
   signature?: string;
   message?: string;
   usernameHash?: string;  // Hashed username for privacy-preserving lookup
+  // Group message fields
+  groupID?: string;
+  groupName?: string;
+  memberIDs?: string[];
+  creatorID?: string;
+  encryptedPayloads?: Array<{
+    toID: string;
+    encrypted: string;
+    signature: string;
+  }>;
 }
 
 export interface CustomWebSocket extends WebSocket {
