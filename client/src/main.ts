@@ -1,883 +1,570 @@
 /**
- * CoffeeChat Client - Main Application
- * Refactored with service-oriented architecture for scalability
+ * CoffeeCHAT v2 - Main Application
  */
 
-import './style.css';
-import { CryptoManager } from './crypto';
-import { WebSocketService } from './services/WebSocketService';
-import { ContactService } from './services/ContactService';
-import { MessageService } from './services/MessageService';
-import { NotificationService } from './services/NotificationService';
-import { PrivacyModeService } from './services/PrivacyModeService';
-import { ImageService } from './services/ImageService';
-import { UsernameService } from './services/UsernameService';
-import { GroupService } from './services/GroupService';
+import './styles.css';
+
+import type { 
+  Contact, Group, Message, ContentType,
+  WSWelcome, WSChatMessage, WSGroupMessage, WSGroupCreated, 
+  WSGroupMemberAdded, WSUserFound, WSError, WSUsernameChanged
+} from './types';
+
+import { eventBus } from './services/EventEmitter';
+import { storage } from './services/StorageService';
+import { wsService } from './services/WebSocketService';
+import { contactService } from './services/ContactService';
+import { groupService } from './services/GroupService';
+import { imageService } from './services/ImageService';
+import { notificationService } from './services/NotificationService';
+import { generateID } from './utils/helpers';
+
 import { ChatUI } from './ui/ChatUI';
-import { ContactListUI } from './ui/ContactListUI';
-import { GroupListUI } from './ui/GroupListUI';
-import type { ChatMessage, ContentType, Group } from './types';
+import { SidebarUI } from './ui/SidebarUI';
+import { ModalsUI } from './ui/ModalsUI';
+import { HeaderUI } from './ui/HeaderUI';
 
-class CoffeeChatClient {
-  private myID: string = '';
-  private myPublicKey: string = '';
-  private myFingerprint: string = '';
-
-  // Services
-  private crypto: CryptoManager;
-  private wsService: WebSocketService;
-  private contactService: ContactService;
-  private messageService: MessageService;
-  private notificationService: NotificationService;
-  private privacyModeService: PrivacyModeService;
-  private imageService: ImageService;
-  private usernameService: UsernameService;
-  private groupService: GroupService;
+class CoffeeChatApp {
+  private myUsername: string = '';
+  
+  private currentView: 'contact' | 'group' | null = null;
+  private currentID: string | null = null;  // username for contacts, groupID for groups
 
   // UI Components
   private chatUI: ChatUI;
-  private contactListUI: ContactListUI;
-  private groupListUI: GroupListUI;
-
-  // Track whether we're viewing a group or contact
-  private viewingGroup: boolean = false;
+  private sidebarUI: SidebarUI;
+  private modalsUI: ModalsUI;
+  private headerUI: HeaderUI;
 
   constructor() {
-    // Initialize services
-    this.crypto = new CryptoManager();
-    this.wsService = new WebSocketService();
-    this.contactService = new ContactService();
-    this.messageService = new MessageService(this.crypto, this.wsService);
-    this.notificationService = new NotificationService();
-    this.privacyModeService = new PrivacyModeService();
-    this.imageService = new ImageService();
-    this.usernameService = new UsernameService();
-    this.groupService = new GroupService();
-
-    // Initialize UI components
     this.chatUI = new ChatUI();
-    this.contactListUI = new ContactListUI();
-    this.groupListUI = new GroupListUI();
+    this.sidebarUI = new SidebarUI();
+    this.modalsUI = new ModalsUI();
+    this.headerUI = new HeaderUI();
 
-    this.initialize();
-  }
-  private async initialize(): Promise<void> {
-    // Setup WebSocket handlers
-    this.wsService.onStatusChange((status, isConnected) => {
-      this.chatUI.updateStatus(status, isConnected);
-    });
-
-    this.wsService.onMessage((message) => {
-      this.handleMessage(message);
-    });
-
-    // Setup contact service handlers
-    this.contactService.onChange(() => {
-      this.renderContacts();
-      this.updateChatUI();
-    });
-
-    // Setup group service handlers
-    this.groupService.onChange(() => {
-      this.renderGroups();
-      this.updateChatUI();
-    });
-
-    // Setup UI event handlers
     this.setupEventListeners();
-    this.setupGroupEventListeners();
-    this.setupSecurityHandlers();// Initialize encryption
-    this.chatUI.updateStatus('Initializing encryption...', false);
-    this.myPublicKey = await this.crypto.initialize();
-    this.myFingerprint = await this.messageService.generateFingerprint(this.myPublicKey);
-
-    this.chatUI.addSystemMessage('End-to-end encryption initialized');
-    this.chatUI.addSystemMessage('⚠️ Session is ephemeral - all data lost on reload');
-
+    this.setupWSHandlers();
+    
     // Request notification permission
-    await this.initializeNotifications();
-
+    notificationService.requestPermission();
+    
     // Connect to server
-    this.connect();
+    wsService.connect();
   }
 
-  private async initializeNotifications(): Promise<void> {
-    const permission = await this.notificationService.requestPermission();
-    
-    if (permission === 'granted') {
-      this.chatUI.addSystemMessage('🔔 Notifications enabled');
-    } else if (permission === 'denied') {
-      this.chatUI.addSystemMessage('🔕 Notifications blocked - enable in browser settings for message alerts');
-    } else {
-      this.chatUI.addSystemMessage('🔔 Enable notifications to receive message alerts');
-    }
-  }
+  // ==================== Event Listeners ====================
 
-  private connect(): void {
-    const wsPort = import.meta.env.VITE_WSS_PORT ?? '8080';
-    const wsHost = import.meta.env.VITE_WSS_URL ?? (window.location.hostname || 'localhost');
-    const wsURL = `wss://${wsHost}:${wsPort}`;
-    
-    this.wsService.connect(wsURL);
-  }  private async handleMessage(data: ChatMessage): Promise<void> {
-    switch (data.type) {
-      case 'welcome':
-        if (data.userID) {
-          this.myID = data.userID;
-          
-          // Send our public key to server
-          this.wsService.send({
-            type: 'publickey',
-            publicKey: this.myPublicKey
-          });
-        }
-        break;
+  private setupEventListeners(): void {
+    // Header
+    this.headerUI.onFireClick(() => this.modalsUI.showFireModal());
 
-      case 'chatmessage':
-        await this.handleChatMessage(data);
-        break;
+    // Sidebar
+    this.sidebarUI.onSetUsername(() => this.changeUsername());
+    this.sidebarUI.onAddContact(() => this.addContact());
+    this.sidebarUI.onCreateGroup(() => this.showCreateGroupModal());
+    this.sidebarUI.onSelectContact((username) => this.selectContact(username));
+    this.sidebarUI.onSelectGroup((id) => this.selectGroup(id));
 
-      case 'publickey':
-        await this.handlePublicKey(data);
-        break;
-
-      case 'usernameSet':
-        this.chatUI.addSystemMessage('✅ Username set (hashed on your device)');
-        break;
-
-      case 'userFound':
-        this.handleUserFound(data);
-        break;      case 'groupcreated':
-        await this.handleGroupCreated(data);
-        break;
-
-      case 'groupmessage':
-        await this.handleGroupMessage(data);
-        break;
-
-      case 'error':
-        if (data.message) {
-          this.chatUI.addSystemMessage(`Error: ${data.message}`);
-        }
-        break;
-    }
-  }private async handleChatMessage(data: ChatMessage): Promise<void> {
-    if (!data.fromID || !data.encrypted) return;
-
-    const senderID = data.fromID; // Capture for use in callback
-    const contact = this.contactService.getContact(senderID);
-    if (contact?.blocked) return;
-
-    try {
-      const decryptedContent = await this.messageService.decryptMessage(
-        senderID,
-        data.encrypted,
-        data.signature
-      );
-
-      // Determine content type
-      const contentType: ContentType = this.imageService.isImageMessage(decryptedContent) ? 'image' : 'text';
-
-      this.contactService.addMessage(senderID, decryptedContent, senderID, contentType);
-
-      if (this.contactService.getCurrentContactID() === senderID) {
-        this.chatUI.addMessage(decryptedContent, 'received', contentType);
-      }
-
-      // Show push notification for new messages
-      this.notificationService.showMessageNotification(
-        senderID,
-        contentType === 'image' ? '🖼️ Image' : decryptedContent,
-        () => {
-          // Switch to the sender's chat when notification is clicked
-          this.contactService.setCurrentContact(senderID);
-          const senderContact = this.contactService.getContact(senderID);
-          if (senderContact) {
-            this.chatUI.renderMessages(senderContact, this.myID);
-          }
-        }
-      );
-    } catch (error) {
-      this.chatUI.addSystemMessage(`⚠️ Failed to process message - encryption error`);
-    }
-  }
-  private async handlePublicKey(data: ChatMessage): Promise<void> {
-    if (!data.fromID || !data.publicKey) return;
-
-    const fingerprint = await this.messageService.generateFingerprint(data.publicKey);
-
-    // Ensure contact exists
-    if (!this.contactService.hasContact(data.fromID)) {
-      this.contactService.addContact(data.fromID);
-    }
-
-    // Store public key
-    this.contactService.updateContact(data.fromID, {
-      publicKey: data.publicKey,
-      publicKeyFingerprint: fingerprint
-    });
-
-    await this.messageService.storePublicKey(data.fromID, data.publicKey);
-
-    // Generate combined fingerprint for verification
-    const combinedChain = this.messageService.combineFingerprints(this.myFingerprint, fingerprint);
-
-    this.chatUI.addSystemMessage(`🔑 Key received from ${data.fromID.substring(0, 8)}...`);
-    this.chatUI.addSystemMessage(`👀 Emoji chain: ${combinedChain} - Ask if it matches theirs`);
-
-    // Show push notification for key exchange
-    this.notificationService.showKeyExchangeNotification(data.fromID);
-  }  private setupEventListeners(): void {
-    // Send message handler
-    this.chatUI.onSendMessage(() => this.sendMessage());
-
-    // Send image handler
+    // Chat
+    this.chatUI.onSend(() => this.sendMessage());
     this.chatUI.onSendImage(() => this.sendImage());
+    this.chatUI.onPaste((file) => this.sendImageFile(file));
+    this.chatUI.onBlock(() => this.toggleBlock());
+    this.chatUI.onAddMember(() => this.showAddMemberModal());
 
-    // Paste image handler (Ctrl+V)
-    this.chatUI.onPasteImage((file) => this.sendImageFromFile(file));    // Block contact handler
-    this.chatUI.onBlockContact(() => {
-      const currentID = this.contactService.getCurrentContactID();
-      if (currentID) {
-        this.contactService.toggleBlock(currentID);
-      }
+    // Modals
+    this.modalsUI.onConfirmCreateGroup(() => this.createGroup());
+    this.modalsUI.onCancelCreateGroup(() => this.modalsUI.hideCreateGroup());
+    this.modalsUI.onConfirmAddMember(() => this.addMembers());
+    this.modalsUI.onCancelAddMember(() => this.modalsUI.hideAddMember());
+    this.modalsUI.onConfirmFire(() => this.fireAll());
+    this.modalsUI.onCancelFire(() => this.modalsUI.hideFireModal());
+    this.modalsUI.onCloseImage(() => this.modalsUI.hideImage());
+
+    // Storage events
+    eventBus.on('contact:added', () => this.renderContacts());
+    eventBus.on('contact:updated', () => this.renderContacts());
+    eventBus.on('contact:removed', () => this.renderContacts());
+    eventBus.on('group:added', () => this.renderGroups());
+    eventBus.on('group:updated', () => this.renderGroups());
+    eventBus.on('group:removed', () => this.renderGroups());
+
+    // Connection status
+    eventBus.on('connection:status', (status) => {
+      this.headerUI.setStatus(status as 'connected' | 'disconnected' | 'connecting');
     });
-
-    // Set username handler
-    this.contactListUI.onSetUsername(() => this.setUsername());
-
-    // Find user handler
-    this.contactListUI.onFindUser(() => this.findUser());
-
-    // Privacy mode toggle handler
-    this.setupPrivacyMode();
   }
 
-  private setupPrivacyMode(): void {
-    const privacyToggle = document.getElementById('privacyToggle');
+  // ==================== WebSocket Handlers ====================
+
+  private setupWSHandlers(): void {
+    eventBus.on('ws:welcome', (data) => this.handleWelcome(data as WSWelcome));
+    eventBus.on('ws:chatmessage', (data) => this.handleChatMessage(data as WSChatMessage));
+    eventBus.on('ws:groupmessage', (data) => this.handleGroupMessage(data as WSGroupMessage));
+    eventBus.on('ws:groupcreated', (data) => this.handleGroupCreated(data as WSGroupCreated));
+    eventBus.on('ws:groupmemberadded', (data) => this.handleMemberAdded(data as WSGroupMemberAdded));
+    eventBus.on('ws:userfound', (data) => this.handleUserFound(data as WSUserFound));
+    eventBus.on('ws:usernamechanged', (data) => this.handleUsernameChanged(data as WSUsernameChanged));
+    eventBus.on('ws:error', (data) => this.handleError(data as WSError));
+  }
+
+  private async handleWelcome(data: WSWelcome): Promise<void> {
+    this.myUsername = data.username;
     
-    if (privacyToggle) {
-      // Initialize UI state
-      this.privacyModeService.initialize();
-      this.updatePrivacyToggleUI(privacyToggle, this.privacyModeService.isEnabled());
-
-      // Toggle on click
-      privacyToggle.addEventListener('click', () => {
-        const isEnabled = this.privacyModeService.toggle();
-        this.updatePrivacyToggleUI(privacyToggle, isEnabled);
-        
-        if (isEnabled) {
-          this.chatUI.addSystemMessage('🙈 Privacy Mode ON - Messages hidden until hover');
-        } else {
-          this.chatUI.addSystemMessage('🐵 Privacy Mode OFF - Messages visible');
-        }
-      });
-
-      // Listen for changes (e.g., keyboard shortcut in the future)
-      this.privacyModeService.onChange((isEnabled) => {
-        this.updatePrivacyToggleUI(privacyToggle, isEnabled);
-      });
-    }
-  }
-
-  private updatePrivacyToggleUI(button: HTMLElement, isEnabled: boolean): void {
-    const icon = button.querySelector('.icon');
+    // Initialize storage with username
+    await storage.initialize(this.myUsername);
     
-    if (isEnabled) {
-      button.classList.add('active');
-      button.title = 'Disable Privacy Mode';
-      if (icon) icon.textContent = '🙈';
-    } else {
-      button.classList.remove('active');
-      button.title = 'Enable Privacy Mode';
-      if (icon) icon.textContent = '🐵';
-    }
-  }  private setupSecurityHandlers(): void {
-    window.addEventListener('beforeunload', () => {
-      this.messageService.clearCache();
-      this.contactService.clear();
-      this.groupService.clear();
-      this.chatUI.clearMessages();
-      this.usernameService.clear();
-      this.myPublicKey = '';
-      this.myFingerprint = '';
-    });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        this.chatUI.clearMessageInput();
-      }
-    });
-  }  /**
-   * Set username - hashed client-side before sending to server
-   */
-  private async setUsername(): Promise<void> {
-    const username = this.contactListUI.getUsernameInput();
-
-    if (!username) {
-      this.chatUI.addSystemMessage('Please enter a username');
-      return;
-    }
-
-    if (username.length < 2 || username.length > 32) {
-      this.chatUI.addSystemMessage('Username must be 2-32 characters');
-      return;
-    }
-
-    try {
-      // Hash username client-side for privacy
-      const usernameHash = await this.usernameService.setUsername(username);
-      
-      // Send only the hash to server - server never sees actual username
-      this.wsService.send({
-        type: 'setusername',
-        usernameHash: usernameHash
-      });
-
-      this.chatUI.addSystemMessage(`🔐 Username "${username}" hashed and sent to server`);
-    } catch (error) {
-      this.chatUI.addSystemMessage('⚠️ Failed to set username');
-    }
-  }
-
-  /**
-   * Find user by username - username is hashed client-side before lookup
-   */
-  private async findUser(): Promise<void> {
-    const username = this.contactListUI.getFindUsernameInput();
-
-    if (!username) {
-      this.chatUI.addSystemMessage('Please enter a username to find');
-      return;
-    }
-
-    try {
-      // Hash the username we're searching for (same algorithm as setting)
-      const usernameHash = await this.usernameService.hashUsername(username);
-      
-      // Send hash to server for lookup - server never sees actual username
-      this.wsService.send({
-        type: 'finduser',
-        usernameHash: usernameHash
-      });
-
-      this.chatUI.addSystemMessage(`🔍 Searching for user "${username}"...`);
-    } catch (error) {
-      this.chatUI.addSystemMessage('⚠️ Failed to search for user');
-    }
-  }
-
-  /**
-   * Handle user found response from server  /**
-   * Handle user found response from server
-   */
-  private handleUserFound(data: ChatMessage): void {
-    const searchedUsername = this.contactListUI.getFindUsernameInput();
+    // Update UI
+    this.sidebarUI.setUsername(this.myUsername);
+    this.sidebarUI.enableUsernameEdit();  // Allow changing username
+    this.chatUI.addSystemMessage(`Connected as ${this.myUsername}`);
     
-    if (data.userID) {
-      this.chatUI.addSystemMessage(`✅ Found "${searchedUsername}"!`);
-      
-      // Auto-add as contact if not already added
-      if (!this.contactService.hasContact(data.userID) && data.userID !== this.myID) {
-        this.contactService.addContact(data.userID);
-        
-        // Store the username we searched for with this contact
-        this.contactService.updateContact(data.userID, { username: searchedUsername });
-        
-        this.contactService.setCurrentContact(data.userID);
-        this.contactListUI.clearFindUsernameInput();
-        
-        // Request key exchange
-        this.messageService.requestKeyExchange(data.userID, this.myPublicKey);
-        this.chatUI.addSystemMessage(`Added "${searchedUsername}" as contact. Requesting key exchange...`);
-      } else if (data.userID === this.myID) {
-        this.chatUI.addSystemMessage(`That's you!`);
-      } else {
-        this.chatUI.addSystemMessage(`"${searchedUsername}" is already in your contacts`);
-      }
-    } else {      this.chatUI.addSystemMessage('❌ User not found or not online');
-    }
-  }
-
-  private async sendMessage(): Promise<void> {
-    // Handle group messages differently
-    if (this.viewingGroup) {
-      await this.sendGroupMessage();
-      return;
-    }
-
-    const content = this.chatUI.getMessageInput().trim();
-    const currentContactID = this.contactService.getCurrentContactID();
-
-    if (!content || !currentContactID) return;
-
-    const contact = this.contactService.getContact(currentContactID);
-    if (!contact || contact.blocked) return;
-
-    if (!this.messageService.hasPublicKey(currentContactID)) {
-      this.chatUI.addSystemMessage('Waiting for key exchange...');
-      return;
-    }
-
-    try {
-      await this.messageService.sendEncryptedMessage(currentContactID, content);
-      
-      this.contactService.addMessage(currentContactID, content, this.myID, 'text');
-      this.chatUI.addMessage(content, 'sent', 'text');
-      this.chatUI.clearMessageInput();
-    } catch (error) {
-      this.chatUI.addSystemMessage('⚠️ Failed to send message');
-    }
-  }
-  private async sendImage(): Promise<void> {
-    // Handle group image sending
-    if (this.viewingGroup) {
-      await this.sendGroupImage();
-      return;
-    }
-
-    const currentContactID = this.contactService.getCurrentContactID();
-
-    if (!currentContactID) {
-      this.chatUI.addSystemMessage('Select a contact first');
-      return;
-    }
-
-    const contact = this.contactService.getContact(currentContactID);
-    if (!contact || contact.blocked) return;
-
-    if (!this.messageService.hasPublicKey(currentContactID)) {
-      this.chatUI.addSystemMessage('Waiting for key exchange...');
-      return;
-    }
-
-    try {
-      // Open image picker and process image
-      const processedImage = await this.imageService.selectImage();
-      
-      if (!processedImage) {
-        return; // User cancelled
-      }
-
-      this.chatUI.addSystemMessage('📤 Encrypting and sending image...');
-
-      // Wrap image as message content
-      const imageContent = this.imageService.wrapImageAsMessage(processedImage.dataUrl);
-
-      // Send encrypted image
-      await this.messageService.sendEncryptedMessage(currentContactID, imageContent);
-      
-      // Add to local history
-      this.contactService.addMessage(currentContactID, imageContent, this.myID, 'image');
-      this.chatUI.addMessage(imageContent, 'sent', 'image');      const savings = Math.round((1 - processedImage.compressedSize / processedImage.originalSize) * 100);
-      this.chatUI.addSystemMessage(`✅ Image sent (${Math.round(processedImage.compressedSize / 1024)}KB${savings > 0 ? `, ${savings}% compressed` : ''})`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.chatUI.addSystemMessage(`⚠️ Failed to send image: ${errorMessage}`);
-    }
-  }
-  /**
-   * Send an image from a File object (used for paste support)
-   */
-  private async sendImageFromFile(file: File): Promise<void> {
-    // Handle group image sending
-    if (this.viewingGroup) {
-      await this.sendGroupImageFromFile(file);
-      return;
-    }
-
-    const currentContactID = this.contactService.getCurrentContactID();
-
-    if (!currentContactID) {
-      this.chatUI.addSystemMessage('Select a contact first');
-      return;
-    }
-
-    const contact = this.contactService.getContact(currentContactID);
-    if (!contact || contact.blocked) return;
-
-    if (!this.messageService.hasPublicKey(currentContactID)) {
-      this.chatUI.addSystemMessage('Waiting for key exchange...');
-      return;
-    }
-
-    try {
-      // Process the pasted image
-      const processedImage = await this.imageService.processImage(file);
-
-      this.chatUI.addSystemMessage('📤 Encrypting and sending pasted image...');
-
-      // Wrap image as message content
-      const imageContent = this.imageService.wrapImageAsMessage(processedImage.dataUrl);
-
-      // Send encrypted image
-      await this.messageService.sendEncryptedMessage(currentContactID, imageContent);
-
-      // Add to local history
-      this.contactService.addMessage(currentContactID, imageContent, this.myID, 'image');
-      this.chatUI.addMessage(imageContent, 'sent', 'image');
-
-      const savings = Math.round((1 - processedImage.compressedSize / processedImage.originalSize) * 100);
-      this.chatUI.addSystemMessage(`✅ Image sent (${Math.round(processedImage.compressedSize / 1024)}KB${savings > 0 ? `, ${savings}% compressed` : ''})`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.chatUI.addSystemMessage(`⚠️ Failed to send image: ${errorMessage}`);
-    }
-  }
-  private renderContacts(): void {
-    const contacts = this.contactService.getAllContacts();
-    const currentContactID = this.viewingGroup ? null : this.contactService.getCurrentContactID();
-
-    this.contactListUI.renderContactsList(
-      contacts,
-      currentContactID,
-      (contactID) => this.switchToContact(contactID)
-    );
-  }
-
-  private renderGroups(): void {
-    const groups = this.groupService.getAllGroups();
-    const currentGroupID = this.viewingGroup ? this.groupService.getCurrentGroupID() : null;
-
-    this.groupListUI.renderGroupsList(
-      groups,
-      currentGroupID,
-      (groupID) => this.switchToGroup(groupID)
-    );
-  }
-
-  private updateChatUI(): void {
-    if (this.viewingGroup) {
-      const currentGroupID = this.groupService.getCurrentGroupID();
-      const group = this.groupService.getCurrentGroup();
-
-      if (currentGroupID && group) {
-        this.chatUI.updateGroupHeader(group.name, group.memberIDs.length);
-      } else {
-        this.chatUI.updateChatHeader(null, false, false);
-      }
-    } else {
-      const currentContactID = this.contactService.getCurrentContactID();
-      const contact = this.contactService.getCurrentContact();
-
-      this.chatUI.updateChatHeader(
-        currentContactID,
-        contact?.blocked || false,
-        currentContactID ? this.messageService.hasPublicKey(currentContactID) : false
-      );
-    }
-  }
-
-  // ==================== Group Methods ====================
-
-  private setupGroupEventListeners(): void {
-    // Show create group modal
-    this.groupListUI.onCreateGroupClick(() => {
-      const contacts = this.contactService.getAllContacts();
-      this.groupListUI.showModal(contacts);
-    });
-
-    // Confirm group creation
-    this.groupListUI.onConfirmCreateGroup(() => this.createGroup());
-  }
-
-  private async createGroup(): Promise<void> {
-    const groupName = this.groupListUI.getGroupNameInput();
-    const selectedMemberIDs = this.groupListUI.getSelectedMemberIDs();
-
-    if (!groupName) {
-      this.chatUI.addSystemMessage('Please enter a group name');
-      return;
-    }
-
-    if (groupName.length < 1 || groupName.length > 32) {
-      this.chatUI.addSystemMessage('Group name must be 1-32 characters');
-      return;
-    }
-
-    if (selectedMemberIDs.length === 0) {
-      this.chatUI.addSystemMessage('Please select at least one member');
-      return;
-    }
-
-    // Add ourselves to the member list
-    const allMemberIDs = [this.myID, ...selectedMemberIDs];
-
-    // Create group locally
-    const group = this.groupService.createGroup(groupName, allMemberIDs, this.myID);
-
-    // Send group creation to server (to notify other members)
-    this.wsService.send({
-      type: 'creategroup',
-      groupID: group.id,
-      groupName: group.name,
-      memberIDs: group.memberIDs,
-      creatorID: this.myID
-    });    this.groupListUI.hideModal();
-    this.chatUI.addSystemMessage(`✅ Group "${groupName}" created with ${selectedMemberIDs.length} members`);
-
-    // Exchange keys with all group members who we don't have keys for
-    await this.exchangeKeysWithGroupMembers(group.memberIDs);
-
-    // Switch to the new group
-    this.switchToGroup(group.id);
-  }
-
-  /**
-   * Exchange encryption keys with all group members
-   * Ensures we can encrypt/decrypt messages for everyone in the group
-   */
-  private async exchangeKeysWithGroupMembers(memberIDs: string[]): Promise<void> {
-    for (const memberID of memberIDs) {
-      // Skip ourselves
-      if (memberID === this.myID) continue;
-
-      // Check if we already have their public key
-      if (!this.messageService.hasPublicKey(memberID)) {
-        // Ensure they exist as a contact (for key storage)
-        if (!this.contactService.hasContact(memberID)) {
-          this.contactService.addContact(memberID);
-        }
-
-        // Request key exchange
-        await this.messageService.requestKeyExchange(memberID, this.myPublicKey);
-        this.chatUI.addSystemMessage(`🔑 Requesting key from group member ${memberID.substring(0, 8)}...`);
-      }
-    }
-  }
-  private async handleGroupCreated(data: ChatMessage): Promise<void> {
-    if (!data.groupID || !data.groupName || !data.memberIDs || !data.creatorID) return;
-
-    // Don't duplicate if we created it
-    if (this.groupService.hasGroup(data.groupID)) return;
-
-    // Add the group
-    this.groupService.addGroup({
-      id: data.groupID,
-      name: data.groupName,
-      memberIDs: data.memberIDs,
-      creatorID: data.creatorID,
-      createdAt: Date.now(),
-      messages: []
-    });
-
-    const creatorName = data.creatorID === this.myID ? 'You' : data.creatorID.substring(0, 8) + '...';
-    this.chatUI.addSystemMessage(`👥 Added to group "${data.groupName}" by ${creatorName}`);
-
-    // Exchange keys with all group members to enable encryption
-    await this.exchangeKeysWithGroupMembers(data.memberIDs);
-  }
-
-  private async handleGroupMessage(data: ChatMessage): Promise<void> {
-    if (!data.groupID || !data.fromID || !data.encrypted) return;
-
-    const group = this.groupService.getGroup(data.groupID);
-    if (!group) return;
-
-    // Verify sender is a member
-    if (!group.memberIDs.includes(data.fromID)) return;
-
-    try {
-      const decryptedContent = await this.messageService.decryptMessage(
-        data.fromID,
-        data.encrypted,
-        data.signature
-      );
-
-      const contentType: ContentType = this.imageService.isImageMessage(decryptedContent) ? 'image' : 'text';
-      
-      // Get sender's username from contacts
-      const senderContact = this.contactService.getContact(data.fromID);
-      const senderUsername = senderContact?.username;
-
-      this.groupService.addMessage(data.groupID, decryptedContent, data.fromID, senderUsername, contentType);      // If viewing this group, show the message
-      if (this.viewingGroup && this.groupService.getCurrentGroupID() === data.groupID) {
-        this.chatUI.addGroupMessage(decryptedContent, data.fromID, senderUsername || '', 'received', contentType);
-      }
-
-      // Show notification
-      this.notificationService.showMessageNotification(
-        `${group.name}`,
-        contentType === 'image' ? '🖼️ Image' : decryptedContent,
-        () => this.switchToGroup(data.groupID!)
-      );
-    } catch (error) {
-      this.chatUI.addSystemMessage(`⚠️ Failed to decrypt group message`);
-    }
-  }
-
-  private switchToGroup(groupID: string): void {
-    this.viewingGroup = true;
-    this.contactService.setCurrentContact(null); // Deselect contact
-    this.groupService.setCurrentGroup(groupID);
-
-    const group = this.groupService.getGroup(groupID);
-    if (group) {
-      this.renderGroupMessages(group);
-    }
-
-    this.renderContacts(); // Update UI to show no contact selected
-    this.renderGroups(); // Update UI to show group selected
-  }
-
-  private switchToContact(contactID: string): void {
-    this.viewingGroup = false;
-    this.groupService.setCurrentGroup(null); // Deselect group
-    this.contactService.setCurrentContact(contactID);
-    
-    const contact = this.contactService.getContact(contactID);
-    if (contact) {
-      this.chatUI.renderMessages(contact, this.myID);
-    }
-
+    // Render stored data
     this.renderContacts();
     this.renderGroups();
   }
 
-  private renderGroupMessages(group: Group): void {
-    this.chatUI.clearMessages();
-      group.messages.forEach((msg) => {
-      const contentType = msg.contentType || 'text';
-      if (msg.fromID === this.myID) {
-        this.chatUI.addMessage(msg.content, 'sent', contentType);
-      } else {
-        this.chatUI.addGroupMessage(msg.content, msg.fromID, msg.fromUsername || '', 'received', contentType);
-      }
-    });
+  private handleChatMessage(data: WSChatMessage): void {
+    if (!data.from || !data.content) return;
+
+    // Ensure contact exists
+    if (!contactService.has(data.from)) {
+      contactService.add(data.from);
+    }
+
+    // Add message
+    const message = contactService.addMessage(
+      data.from,
+      data.content,
+      data.from,
+      data.contentType || 'text'
+    );
+
+    // Show in UI if viewing this contact
+    if (this.currentView === 'contact' && this.currentID === data.from) {
+      this.chatUI.addMessage(message, 'received');
+      this.chatUI.scrollToBottom();
+    }
+
+    // Notification
+    notificationService.showMessage(
+      data.from,
+      data.contentType === 'image' ? '🖼️ Image' : data.content,
+      () => this.selectContact(data.from!)
+    );
+
+    this.renderContacts();
   }
 
-  private async sendGroupMessage(): Promise<void> {
-    const content = this.chatUI.getMessageInput().trim();
-    const currentGroupID = this.groupService.getCurrentGroupID();
+  private handleGroupMessage(data: WSGroupMessage): void {
+    if (!data.groupID || !data.from || !data.content) return;
 
-    if (!content || !currentGroupID) return;
-
-    const group = this.groupService.getGroup(currentGroupID);
+    const group = groupService.get(data.groupID);
     if (!group) return;
 
-    // Get other members (exclude self)
-    const otherMembers = group.memberIDs.filter(id => id !== this.myID);
+    // Verify sender is a member
+    if (!group.members.includes(data.from)) return;
 
-    // Check we have keys for all members
-    for (const memberID of otherMembers) {
-      if (!this.messageService.hasPublicKey(memberID)) {
-        this.chatUI.addSystemMessage(`⚠️ Missing encryption key for a member. Cannot send.`);
-        return;
+    // Add message
+    const message = groupService.addMessage(
+      data.groupID,
+      data.content,
+      data.from,
+      data.contentType || 'text'
+    );
+
+    // Show in UI if viewing this group
+    if (this.currentView === 'group' && this.currentID === data.groupID) {
+      this.chatUI.addMessage(message, 'received', true);
+      this.chatUI.scrollToBottom();
+    }
+
+    // Notification
+    notificationService.showMessage(
+      group.name,
+      data.contentType === 'image' ? '🖼️ Image' : data.content,
+      () => this.selectGroup(data.groupID)
+    );
+
+    this.renderGroups();
+  }
+
+  private handleGroupCreated(data: WSGroupCreated): void {
+    if (!data.groupID || !data.groupName || !data.members) return;
+
+    // Don't duplicate
+    if (groupService.has(data.groupID)) return;
+
+    const group: Group = {
+      id: data.groupID,
+      name: data.groupName,
+      members: data.members,
+      creator: data.creator,
+      createdAt: Date.now(),
+      messages: [],
+      unreadCount: 0
+    };
+
+    groupService.add(group);
+    
+    const creatorName = data.creator === this.myUsername 
+      ? 'You' 
+      : data.creator;
+    this.chatUI.addSystemMessage(`👥 Added to "${data.groupName}" by ${creatorName}`);
+    
+    this.renderGroups();
+  }
+
+  private handleMemberAdded(data: WSGroupMemberAdded): void {
+    if (!data.groupID || !data.members) return;
+
+    const group = groupService.get(data.groupID);
+    if (!group) return;
+
+    groupService.addMembers(data.groupID, data.members);
+    
+    // Update UI if viewing this group
+    if (this.currentView === 'group' && this.currentID === data.groupID) {
+      const updatedGroup = groupService.get(data.groupID);
+      if (updatedGroup) {
+        this.chatUI.showGroup(updatedGroup, this.myUsername);
       }
     }
 
-    try {
-      // Encrypt message for each member (pairwise encryption)
-      const encryptedPayloads: Array<{ toID: string; encrypted: string; signature: string }> = [];
+    this.chatUI.addSystemMessage(`👥 New members added to "${group.name}"`);
+  }
 
-      for (const memberID of otherMembers) {
-        const { encrypted, signature } = await this.crypto.encryptAndSign(memberID, content);
-        encryptedPayloads.push({ toID: memberID, encrypted, signature });
-      }
+  private handleUserFound(data: WSUserFound): void {
+    if (!data.username) return;
 
-      // Send to server
-      this.wsService.send({
-        type: 'groupmessage',
-        groupID: currentGroupID,
-        encryptedPayloads
-      });      // Add to local history
-      const myUsername = this.usernameService.getUsername();
-      this.groupService.addMessage(currentGroupID, content, this.myID, myUsername, 'text');
-      this.chatUI.addMessage(content, 'sent', 'text');
-      this.chatUI.clearMessageInput();
-    } catch (error) {
-      this.chatUI.addSystemMessage('⚠️ Failed to send group message');
+    // Add as contact if not exists
+    if (!contactService.has(data.username)) {
+      contactService.add(data.username);
+      const status = data.isOnline ? '(online)' : '(offline)';
+      this.chatUI.addSystemMessage(`✅ Found user: ${data.username} ${status}`);
+      this.renderContacts();
+    } else {
+      this.chatUI.addSystemMessage(`ℹ️ User already in contacts`);
     }
   }
 
-  /**
-   * Send an image to the current group
-   */
-  private async sendGroupImage(): Promise<void> {
-    const currentGroupID = this.groupService.getCurrentGroupID();
-    if (!currentGroupID) {
-      this.chatUI.addSystemMessage('Select a group first');
+  private handleUsernameChanged(data: WSUsernameChanged): void {
+    this.myUsername = data.newUsername;
+    storage.setUsername(data.newUsername);
+    this.sidebarUI.setUsername(data.newUsername);
+    this.chatUI.addSystemMessage(`✅ Username changed to "${data.newUsername}"`);
+  }
+
+  private handleError(data: WSError): void {
+    this.chatUI.addSystemMessage(`⚠️ ${data.message}`);
+  }
+
+  // ==================== User Actions ====================
+
+  private async changeUsername(): Promise<void> {
+    const username = this.sidebarUI.getUsernameInput();
+    
+    if (!username || username.length < 2 || username.length > 32) {
+      this.chatUI.addSystemMessage('Username must be 2-32 characters');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_#-]+$/.test(username)) {
+      this.chatUI.addSystemMessage('Username can only contain letters, numbers, _, -, #');
+      return;
+    }
+
+    // Send change request to server
+    wsService.send({ type: 'setusername', username });
+    this.chatUI.addSystemMessage(`🔄 Requesting username change to "${username}"...`);
+  }
+
+  private async addContact(): Promise<void> {
+    const input = this.sidebarUI.getAddContactInput();
+    if (!input) return;
+
+    // Check if it looks like a username
+    const username = input.startsWith('@') ? input.substring(1) : input;
+    
+    if (!username || username.length < 1) {
+      this.chatUI.addSystemMessage('Enter a username');
+      return;
+    }
+
+    // Search for user
+    wsService.send({ type: 'finduser', username });
+    this.chatUI.addSystemMessage(`🔍 Searching for ${username}...`);
+
+    this.sidebarUI.clearAddContactInput();
+  }
+
+  private selectContact(username: string): void {
+    this.currentView = 'contact';
+    this.currentID = username;
+    
+    contactService.setCurrent(username);
+    groupService.setCurrent(null);
+    
+    const contact = contactService.get(username);
+    if (contact) {
+      this.chatUI.showContact(contact, this.myUsername);
+      this.chatUI.focusInput();
+    }
+    
+    this.renderContacts();
+    this.renderGroups();
+    this.sidebarUI.switchTab('contacts');
+  }
+
+  private selectGroup(id: string): void {
+    this.currentView = 'group';
+    this.currentID = id;
+    
+    groupService.setCurrent(id);
+    contactService.setCurrent(null);
+    
+    const group = groupService.get(id);
+    if (group) {
+      this.chatUI.showGroup(group, this.myUsername);
+      this.chatUI.focusInput();
+    }
+    
+    this.renderContacts();
+    this.renderGroups();
+    this.sidebarUI.switchTab('groups');
+  }
+
+  private async sendMessage(): Promise<void> {
+    const content = this.chatUI.getInputValue();
+    if (!content) return;
+
+    if (this.currentView === 'contact' && this.currentID) {
+      await this.sendContactMessage(content, 'text');
+    } else if (this.currentView === 'group' && this.currentID) {
+      await this.sendGroupMessage(content, 'text');
+    }
+  }
+
+  private async sendImage(): Promise<void> {
+    try {
+      const processed = await imageService.selectImage();
+      if (!processed) return;
+
+      this.chatUI.addSystemMessage('📤 Sending image...');
+
+      if (this.currentView === 'contact' && this.currentID) {
+        await this.sendContactMessage(processed.dataUrl, 'image');
+      } else if (this.currentView === 'group' && this.currentID) {
+        await this.sendGroupMessage(processed.dataUrl, 'image');
+      }
+    } catch (error) {
+      this.chatUI.addSystemMessage('⚠️ Failed to send image');
+    }
+  }
+
+  private async sendImageFile(file: File): Promise<void> {
+    if (!this.currentView || !this.currentID) {
+      this.chatUI.addSystemMessage('Select a conversation first');
       return;
     }
 
     try {
-      const processedImage = await this.imageService.selectImage();
-      if (!processedImage) return;
+      const processed = await imageService.processImage(file);
+      this.chatUI.addSystemMessage('📤 Sending image...');
 
-      const imageContent = this.imageService.wrapImageAsMessage(processedImage.dataUrl);
-      await this.sendGroupContent(currentGroupID, imageContent, 'image');
-
-      const savings = Math.round((1 - processedImage.compressedSize / processedImage.originalSize) * 100);
-      this.chatUI.addSystemMessage(`✅ Image sent (${Math.round(processedImage.compressedSize / 1024)}KB${savings > 0 ? `, ${savings}% compressed` : ''})`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.chatUI.addSystemMessage(`⚠️ Failed to send image: ${errorMessage}`);
-    }
-  }
-
-  /**
-   * Send an image from File to the current group (paste support)
-   */
-  private async sendGroupImageFromFile(file: File): Promise<void> {
-    const currentGroupID = this.groupService.getCurrentGroupID();
-    if (!currentGroupID) {
-      this.chatUI.addSystemMessage('Select a group first');
-      return;
-    }
-
-    try {
-      const processedImage = await this.imageService.processImage(file);
-      const imageContent = this.imageService.wrapImageAsMessage(processedImage.dataUrl);
-      
-      this.chatUI.addSystemMessage('📤 Encrypting and sending pasted image...');
-      await this.sendGroupContent(currentGroupID, imageContent, 'image');
-
-      const savings = Math.round((1 - processedImage.compressedSize / processedImage.originalSize) * 100);
-      this.chatUI.addSystemMessage(`✅ Image sent (${Math.round(processedImage.compressedSize / 1024)}KB${savings > 0 ? `, ${savings}% compressed` : ''})`);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.chatUI.addSystemMessage(`⚠️ Failed to send image: ${errorMessage}`);
-    }
-  }
-
-  /**
-   * Send content (text or image) to a group with pairwise encryption
-   */
-  private async sendGroupContent(groupID: string, content: string, contentType: ContentType): Promise<void> {
-    const group = this.groupService.getGroup(groupID);
-    if (!group) throw new Error('Group not found');
-
-    const otherMembers = group.memberIDs.filter(id => id !== this.myID);
-
-    // Check we have keys for all members
-    for (const memberID of otherMembers) {
-      if (!this.messageService.hasPublicKey(memberID)) {
-        throw new Error('Missing encryption key for a member');
+      if (this.currentView === 'contact') {
+        await this.sendContactMessage(processed.dataUrl, 'image');
+      } else {
+        await this.sendGroupMessage(processed.dataUrl, 'image');
       }
+    } catch (error) {
+      this.chatUI.addSystemMessage('⚠️ Failed to send image');
     }
+  }
 
-    // Encrypt for each member
-    const encryptedPayloads: Array<{ toID: string; encrypted: string; signature: string }> = [];
-    for (const memberID of otherMembers) {
-      const { encrypted, signature } = await this.crypto.encryptAndSign(memberID, content);
-      encryptedPayloads.push({ toID: memberID, encrypted, signature });
-    }
+  private async sendContactMessage(content: string, contentType: ContentType): Promise<void> {
+    if (!this.currentID) return;
+
+    const contact = contactService.get(this.currentID);
+    if (!contact || contact.blocked) return;
 
     // Send to server
-    this.wsService.send({
-      type: 'groupmessage',
-      groupID,
-      encryptedPayloads
+    wsService.send({
+      type: 'chatmessage',
+      to: this.currentID,
+      content,
+      contentType
     });
 
     // Add to local history
-    const myUsername = this.usernameService.getUsername();
-    this.groupService.addMessage(groupID, content, this.myID, myUsername, contentType);
-    this.chatUI.addMessage(content, 'sent', contentType);
+    const message = contactService.addMessage(
+      this.currentID,
+      content,
+      this.myUsername,
+      contentType
+    );
+
+    // Show in UI
+    this.chatUI.addMessage(message, 'sent');
+    this.chatUI.clearInput();
+    this.chatUI.scrollToBottom();
+    this.renderContacts();
+  }
+
+  private async sendGroupMessage(content: string, contentType: ContentType): Promise<void> {
+    if (!this.currentID) return;
+
+    const group = groupService.get(this.currentID);
+    if (!group) return;
+
+    // Send to server
+    wsService.send({
+      type: 'groupmessage',
+      groupID: this.currentID,
+      content,
+      contentType
+    });
+
+    // Add to local history
+    const message = groupService.addMessage(
+      this.currentID,
+      content,
+      this.myUsername,
+      contentType
+    );
+
+    // Show in UI
+    this.chatUI.addMessage(message, 'sent');
+    this.chatUI.clearInput();
+    this.chatUI.scrollToBottom();
+    this.renderGroups();
+  }
+
+  private toggleBlock(): void {
+    if (this.currentView !== 'contact' || !this.currentID) return;
+
+    const blocked = contactService.toggleBlock(this.currentID);
+    const contact = contactService.get(this.currentID);
+    
+    if (contact) {
+      this.chatUI.showContact(contact, this.myUsername);
+      this.chatUI.addSystemMessage(blocked ? '🚫 User blocked' : '✅ User unblocked');
+    }
+  }
+
+  // ==================== Group Actions ====================
+
+  private showCreateGroupModal(): void {
+    const contacts = contactService.getAll();
+    this.modalsUI.showCreateGroup(contacts);
+  }
+
+  private createGroup(): void {
+    const { name, memberUsernames } = this.modalsUI.getCreateGroupData();
+
+    if (!name || name.length < 1 || name.length > 32) {
+      this.chatUI.addSystemMessage('Group name must be 1-32 characters');
+      return;
+    }
+
+    if (memberUsernames.length === 0) {
+      this.chatUI.addSystemMessage('Select at least one member');
+      return;
+    }
+
+    // Include self in members
+    const allMembers = [this.myUsername, ...memberUsernames];
+
+    // Create locally
+    const group = groupService.create(name, allMembers, this.myUsername);
+
+    // Send to server
+    wsService.send({
+      type: 'creategroup',
+      groupID: group.id,
+      groupName: group.name,
+      members: group.members
+    });
+
+    this.modalsUI.hideCreateGroup();
+    this.chatUI.addSystemMessage(`✅ Group "${name}" created`);
+    this.selectGroup(group.id);
+  }
+
+  private showAddMemberModal(): void {
+    if (this.currentView !== 'group' || !this.currentID) return;
+
+    const group = groupService.get(this.currentID);
+    if (!group) return;
+
+    const contacts = contactService.getAll();
+    this.modalsUI.showAddMember(contacts, group.members);
+  }
+
+  private addMembers(): void {
+    if (!this.currentID) return;
+
+    const newMembers = this.modalsUI.getAddMemberData();
+    if (newMembers.length === 0) {
+      this.chatUI.addSystemMessage('Select at least one member');
+      return;
+    }
+
+    // Update local
+    groupService.addMembers(this.currentID, newMembers);
+
+    // Send to server
+    wsService.send({
+      type: 'addgroupmembers',
+      groupID: this.currentID,
+      members: newMembers
+    });
+
+    this.modalsUI.hideAddMember();
+    this.chatUI.addSystemMessage(`✅ Added ${newMembers.length} member(s)`);
+
+    // Refresh UI
+    const group = groupService.get(this.currentID);
+    if (group) {
+      this.chatUI.showGroup(group, this.myUsername);
+    }
+  }
+
+  // ==================== Fire (Delete All) ====================
+
+  private async fireAll(): Promise<void> {
+    // Clear all data
+    await storage.clearAll();
+    
+    // Clear services
+    imageService.revokeAll();
+    
+    // Disconnect
+    wsService.disconnect();
+    
+    // Clear UI
+    this.modalsUI.hideFireModal();
+    
+    // Reload page for fresh start
+    window.location.reload();
+  }
+
+  // ==================== Rendering ====================
+
+  private renderContacts(): void {
+    const contacts = contactService.getAll();
+    const selectedUsername = this.currentView === 'contact' ? this.currentID : null;
+    this.sidebarUI.renderContacts(contacts, selectedUsername);
+  }
+
+  private renderGroups(): void {
+    const groups = groupService.getAll();
+    const selectedID = this.currentView === 'group' ? this.currentID : null;
+    this.sidebarUI.renderGroups(groups, selectedID);
   }
 }
 
-// Initialize application after DOM is ready
+// Initialize app
 document.addEventListener('DOMContentLoaded', () => {
-  new CoffeeChatClient();
+  new CoffeeChatApp();
 });

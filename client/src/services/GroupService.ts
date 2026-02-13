@@ -1,156 +1,179 @@
 /**
- * Group management service
- * Handles group creation, storage, and message management
- * Groups have static membership defined at creation for security
+ * Group Service - Manages group chats with dynamic membership
  */
 
-import type { Group, ContentType } from '../types';
+import type { Group, Message, ContentType } from '../types';
+import { storage } from './StorageService';
+import { eventBus } from './EventEmitter';
+import { generateID } from '../utils/helpers';
 
 export class GroupService {
-  private groups: Map<string, Group> = new Map();
   private currentGroupID: string | null = null;
-  private changeHandlers: Set<() => void> = new Set();
 
   /**
-   * Generate a unique group ID
+   * Get all groups sorted by recent activity
    */
-  private generateGroupID(): string {
-    const array = new Uint8Array(16);
-    window.crypto.getRandomValues(array);
-    return 'grp_' + Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
+  getAll(): Group[] {
+    return storage.getGroups();
   }
 
   /**
-   * Create a new group with static membership
-   * Members are fixed at creation and cannot be changed
+   * Get a specific group
    */
-  createGroup(name: string, memberIDs: string[], creatorID: string): Group {
-    const groupID = this.generateGroupID();
-    
-    const group: Group = {
-      id: groupID,
-      name: name.trim(),
-      memberIDs: [...memberIDs], // Copy to prevent external modification
-      creatorID,
-      createdAt: Date.now(),
-      messages: []
-    };
-    
-    this.groups.set(groupID, group);
-    this.notifyChange();
-    
-    return group;
-  }
-
-  /**
-   * Add a group that was created by someone else
-   */
-  addGroup(group: Group): void {
-    if (!this.groups.has(group.id)) {
-      this.groups.set(group.id, {
-        ...group,
-        messages: [] // New members only see new messages
-      });
-      this.notifyChange();
-    }
-  }
-
-  /**
-   * Get group by ID
-   */
-  getGroup(groupID: string): Group | undefined {
-    return this.groups.get(groupID);
-  }
-
-  /**
-   * Get all groups
-   */
-  getAllGroups(): Group[] {
-    return Array.from(this.groups.values());
+  get(id: string): Group | undefined {
+    return storage.getGroup(id);
   }
 
   /**
    * Check if group exists
    */
-  hasGroup(groupID: string): boolean {
-    return this.groups.has(groupID);
+  has(id: string): boolean {
+    return storage.hasGroup(id);
   }
 
   /**
-   * Add message to group's history
+   * Create a new group
    */
-  addMessage(
-    groupID: string, 
-    content: string, 
-    fromID: string, 
-    fromUsername?: string,
-    contentType: ContentType = 'text'
-  ): void {
-    const group = this.getGroup(groupID);
-    if (group) {
-      group.messages.push({
-        content,
-        fromID,
-        fromUsername,
-        timestamp: Date.now(),
-        contentType
-      });
-      group.lastMessage = contentType === 'image' ? '🖼️ Image' : content;
-      this.notifyChange();
+  create(name: string, members: string[], creator: string): Group {
+    const group: Group = {
+      id: generateID(),
+      name,
+      members,
+      creator,
+      createdAt: Date.now(),
+      messages: [],
+      unreadCount: 0
+    };
+
+    storage.addGroup(group);
+    return group;
+  }
+
+  /**
+   * Add a group (from server notification)
+   */
+  add(group: Group): void {
+    if (!storage.hasGroup(group.id)) {
+      storage.addGroup(group);
     }
   }
 
   /**
-   * Set current active group
+   * Update group info
    */
-  setCurrentGroup(groupID: string | null): void {
-    this.currentGroupID = groupID;
-    this.notifyChange();
+  update(id: string, updates: Partial<Group>): void {
+    storage.updateGroup(id, updates);
   }
 
   /**
-   * Get current active group ID
+   * Remove a group
    */
-  getCurrentGroupID(): string | null {
+  remove(id: string): void {
+    storage.removeGroup(id);
+    if (this.currentGroupID === id) {
+      this.currentGroupID = null;
+    }
+  }
+
+  /**
+   * Add members to a group
+   */
+  addMembers(groupID: string, newMembers: string[]): void {
+    const group = storage.getGroup(groupID);
+    if (!group) return;
+
+    const existingSet = new Set(group.members);
+    const toAdd = newMembers.filter(m => !existingSet.has(m));
+    
+    if (toAdd.length > 0) {
+      storage.updateGroup(groupID, {
+        members: [...group.members, ...toAdd]
+      });
+    }
+  }
+
+  /**
+   * Check if user is a member
+   */
+  isMember(groupID: string, username: string): boolean {
+    const group = storage.getGroup(groupID);
+    return group?.members.includes(username) ?? false;
+  }
+
+  /**
+   * Add a message to group's history
+   */
+  addMessage(
+    groupID: string,
+    content: string,
+    fromUsername: string,
+    contentType: ContentType = 'text'
+  ): Message {
+    const group = storage.getGroup(groupID);
+    if (!group) {
+      throw new Error(`Group ${groupID} not found`);
+    }
+
+    const message: Message = {
+      id: generateID(),
+      content,
+      from: fromUsername,
+      timestamp: Date.now(),
+      contentType,
+      status: 'sent'
+    };
+
+    group.messages.push(message);
+
+    // Update unread count if it's a received message and not viewing this group
+    const myUsername = storage.getUsername();
+    if (fromUsername !== myUsername && this.currentGroupID !== groupID) {
+      group.unreadCount++;
+    }
+
+    storage.updateGroup(groupID, {
+      messages: group.messages,
+      unreadCount: group.unreadCount
+    });
+
+    eventBus.emit('message:received', {
+      conversationID: groupID,
+      message,
+      isGroup: true
+    });
+
+    return message;
+  }
+
+  /**
+   * Get current group ID
+   */
+  getCurrentID(): string | null {
     return this.currentGroupID;
   }
 
   /**
-   * Get current active group
+   * Set current group (for viewing)
    */
-  getCurrentGroup(): Group | undefined {
-    if (this.currentGroupID) {
-      return this.groups.get(this.currentGroupID);
+  setCurrent(id: string | null): void {
+    this.currentGroupID = id;
+    
+    // Clear unread count
+    if (id) {
+      const group = storage.getGroup(id);
+      if (group && group.unreadCount > 0) {
+        storage.updateGroup(id, { unreadCount: 0 });
+      }
     }
-    return undefined;
   }
 
   /**
-   * Check if user is member of group
+   * Get messages for a group
    */
-  isMember(groupID: string, userID: string): boolean {
-    const group = this.groups.get(groupID);
-    return group ? group.memberIDs.includes(userID) : false;
-  }
-
-  /**
-   * Register change handler
-   */
-  onChange(handler: () => void): () => void {
-    this.changeHandlers.add(handler);
-    return () => this.changeHandlers.delete(handler);
-  }
-
-  /**
-   * Clear all groups
-   */
-  clear(): void {
-    this.groups.clear();
-    this.currentGroupID = null;
-    this.notifyChange();
-  }
-
-  private notifyChange(): void {
-    this.changeHandlers.forEach(handler => handler());
+  getMessages(id: string): Message[] {
+    return storage.getGroup(id)?.messages || [];
   }
 }
+
+// Singleton
+export const groupService = new GroupService();

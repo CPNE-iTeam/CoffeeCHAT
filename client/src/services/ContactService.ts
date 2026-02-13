@@ -1,133 +1,160 @@
 /**
- * Contact management service
+ * Contact Service - Manages contacts and direct messages
  */
 
-import type { Contact, ContentType } from '../types';
+import type { Contact, Message, ContentType } from '../types';
+import { storage } from './StorageService';
+import { eventBus } from './EventEmitter';
+import { generateID } from '../utils/helpers';
 
 export class ContactService {
-  private contacts: Map<string, Contact> = new Map();
-  private currentContactID: string | null = null;
-  private changeHandlers: Set<() => void> = new Set();
+  private currentUsername: string | null = null;
+
+  /**
+   * Get all contacts sorted by recent activity
+   */
+  getAll(): Contact[] {
+    return storage.getContacts();
+  }
+
+  /**
+   * Get a specific contact by username
+   */
+  get(username: string): Contact | undefined {
+    return storage.getContact(username);
+  }
+
+  /**
+   * Check if contact exists
+   */
+  has(username: string): boolean {
+    return storage.hasContact(username);
+  }
 
   /**
    * Add a new contact
    */
-  addContact(contactID: string): Contact {
-    if (!this.contacts.has(contactID)) {
-      const contact: Contact = {
-        id: contactID,
-        messages: [],
-        blocked: false
-      };
-      this.contacts.set(contactID, contact);
-      this.notifyChange();
+  add(username: string, displayName?: string): Contact {
+    if (storage.hasContact(username)) {
+      return storage.getContact(username)!;
     }
-    return this.contacts.get(contactID)!;
+
+    const contact: Contact = {
+      username,
+      displayName,
+      messages: [],
+      unreadCount: 0,
+      blocked: false,
+      createdAt: Date.now()
+    };
+
+    storage.addContact(contact);
+    return contact;
   }
 
   /**
-   * Get contact by ID
+   * Update contact info
    */
-  getContact(contactID: string): Contact | undefined {
-    return this.contacts.get(contactID);
+  update(username: string, updates: Partial<Contact>): void {
+    storage.updateContact(username, updates);
   }
 
   /**
-   * Get all contacts as array
+   * Remove a contact
    */
-  getAllContacts(): Contact[] {
-    return Array.from(this.contacts.values());
-  }
-
-  /**
-   * Update contact data
-   */
-  updateContact(contactID: string, updates: Partial<Contact>): void {
-    const contact = this.contacts.get(contactID);
-    if (contact) {
-      Object.assign(contact, updates);
-      this.notifyChange();
-    }
-  }
-
-  /**
-   * Add message to contact's history
-   */
-  addMessage(contactID: string, content: string, fromID: string, contentType: ContentType = 'text'): void {
-    const contact = this.getContact(contactID);
-    if (contact) {
-      contact.messages.push({
-        content,
-        fromID,
-        timestamp: Date.now(),
-        contentType
-      });
-      // For images, show placeholder text in contact list
-      contact.lastMessage = contentType === 'image' ? '🖼️ Image' : content;
-      this.notifyChange();
+  remove(username: string): void {
+    storage.removeContact(username);
+    if (this.currentUsername === username) {
+      this.currentUsername = null;
     }
   }
 
   /**
    * Toggle block status
    */
-  toggleBlock(contactID: string): boolean {
-    const contact = this.getContact(contactID);
-    if (contact) {
-      contact.blocked = !contact.blocked;
-      this.notifyChange();
-      return contact.blocked;
+  toggleBlock(username: string): boolean {
+    const contact = storage.getContact(username);
+    if (!contact) return false;
+
+    const blocked = !contact.blocked;
+    storage.updateContact(username, { blocked });
+    return blocked;
+  }
+
+  /**
+   * Add a message to contact's history
+   */
+  addMessage(
+    contactUsername: string,
+    content: string,
+    fromUsername: string,
+    contentType: ContentType = 'text'
+  ): Message {
+    const contact = storage.getContact(contactUsername);
+    if (!contact) {
+      throw new Error(`Contact ${contactUsername} not found`);
     }
-    return false;
+
+    const message: Message = {
+      id: generateID(),
+      content,
+      from: fromUsername,
+      timestamp: Date.now(),
+      contentType,
+      status: 'sent'
+    };
+
+    contact.messages.push(message);
+    
+    // Update unread count if it's a received message and not viewing this contact
+    const myUsername = storage.getUsername();
+    if (fromUsername !== myUsername && this.currentUsername !== contactUsername) {
+      contact.unreadCount++;
+    }
+
+    storage.updateContact(contactUsername, {
+      messages: contact.messages,
+      unreadCount: contact.unreadCount
+    });
+
+    eventBus.emit('message:received', {
+      conversationID: contactUsername,
+      message,
+      isGroup: false
+    });
+
+    return message;
   }
 
   /**
-   * Set current active contact
+   * Get current contact username
    */
-  setCurrentContact(contactID: string | null): void {
-    this.currentContactID = contactID;
-    this.notifyChange();
+  getCurrentUsername(): string | null {
+    return this.currentUsername;
   }
 
   /**
-   * Get current active contact ID
+   * Set current contact (for viewing)
    */
-  getCurrentContactID(): string | null {
-    return this.currentContactID;
+  setCurrent(username: string | null): void {
+    this.currentUsername = username;
+    
+    // Clear unread count
+    if (username) {
+      const contact = storage.getContact(username);
+      if (contact && contact.unreadCount > 0) {
+        storage.updateContact(username, { unreadCount: 0 });
+      }
+    }
   }
 
   /**
-   * Get current active contact
+   * Get messages for a contact
    */
-  getCurrentContact(): Contact | undefined {
-    return this.currentContactID ? this.getContact(this.currentContactID) : undefined;
-  }
-
-  /**
-   * Check if contact exists
-   */
-  hasContact(contactID: string): boolean {
-    return this.contacts.has(contactID);
-  }
-
-  /**
-   * Register change handler
-   */
-  onChange(handler: () => void): () => void {
-    this.changeHandlers.add(handler);
-    return () => this.changeHandlers.delete(handler);
-  }
-
-  /**
-   * Clear all contacts
-   */
-  clear(): void {
-    this.contacts.clear();
-    this.currentContactID = null;
-    this.notifyChange();
-  }
-
-  private notifyChange(): void {
-    this.changeHandlers.forEach(handler => handler());
+  getMessages(username: string): Message[] {
+    return storage.getContact(username)?.messages || [];
   }
 }
+
+// Singleton
+export const contactService = new ContactService();

@@ -1,39 +1,61 @@
 /**
- * Shared type definitions for CoffeeChat server
+ * Server Types
  */
 
 import type { WebSocket } from 'ws';
 
+export interface CustomWebSocket extends WebSocket {
+  username?: string;
+  isAlive?: boolean;
+}
+
 export interface ServerMessage {
   type: string;
-  publicKey?: string;
-  toID?: string;
-  encrypted?: string;
-  signature?: string;
-  message?: string;
-  usernameHash?: string;  // Hashed username for privacy-preserving lookup
-  // Group message fields
-  groupID?: string;
-  groupName?: string;
-  memberIDs?: string[];
-  creatorID?: string;
-  encryptedPayloads?: Array<{
-    toID: string;
-    encrypted: string;
-    signature: string;
-  }>;
+  [key: string]: unknown;
 }
 
-export interface CustomWebSocket extends WebSocket {
-  userID?: string;
-  publicKey?: string;
-  isAlive?: boolean;
-  usernameHash?: string;  // Hashed username (server never sees plaintext)
+export interface ChatMessage extends ServerMessage {
+  type: 'chatmessage';
+  to: string;  // recipient username
+  content: string;
+  contentType: 'text' | 'image';
 }
 
-export interface ConnectionInfo {
-  userID: string;
-  publicKey?: string;
-  connectedAt: number;
-  usernameHash?: string;  // Hashed username for lookup
+export interface GroupMessage extends ServerMessage {
+  type: 'groupmessage';
+  groupID: string;
+  content: string;
+  contentType: 'text' | 'image';
+}
+
+export interface CreateGroup extends ServerMessage {
+  type: 'creategroup';
+  groupID: string;
+  groupName: string;
+  members: string[];  // usernames
+  creator: string;    // creator username
+}
+
+export interface AddGroupMembers extends ServerMessage {
+  type: 'addgroupmembers';
+  groupID: string;
+  members: string[];  // usernames to add
+}
+
+export interface SetUsername extends ServerMessage {
+  type: 'setusername';
+  username: string;
+}
+
+export interface FindUser extends ServerMessage {
+  type: 'finduser';
+  username: string;
+}
+
+// Group storage (in-memory)
+export interface GroupInfo {
+  id: string;
+  name: string;
+  members: string[];  // usernames
+  creator: string;    // creator username
 }

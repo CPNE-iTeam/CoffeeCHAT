@@ -1,86 +1,166 @@
 /**
- * Shared type definitions for CoffeeChat client
+ * CoffeeCHAT v2 - Type Definitions
  */
 
-export interface ChatMessage {
-  type: string;
-  content?: string;
-  encrypted?: string;
-  signature?: string;
-  fromID?: string;
-  toID?: string;
-  userID?: string;
-  message?: string;
-  publicKey?: string;
-  requestingUserID?: string;
-  timestamp?: number;
-  nonce?: string;
-  contentType?: 'text' | 'image';  // Message content type
-  usernameHash?: string;  // Hashed username for privacy-preserving lookup
-  // Group message fields
-  groupID?: string;
-  groupName?: string;
-  memberIDs?: string[];
-  creatorID?: string;
-  encryptedPayloads?: Array<{
-    toID: string;
-    encrypted: string;
-    signature: string;
-  }>;
-}
+// ==================== Core Types ====================
 
 export interface Contact {
-  id: string;
-  username?: string;  // Display name (optional)
-  messages: Array<{
-    content: string;
-    fromID: string;
-    timestamp: number;
-    contentType?: 'text' | 'image';
-  }>;
-  lastMessage?: string;
-  publicKey?: string;
-  publicKeyFingerprint?: string;
-  isVerified?: boolean;
-  blocked?: boolean;
+  username: string;
+  displayName?: string;
+  isOnline?: boolean;
+  lastSeen?: number;
+  messages: Message[];
+  unreadCount: number;
+  blocked: boolean;
+  createdAt: number;
 }
 
-/**
- * Group chat - static membership defined at creation
- * Messages are pairwise encrypted to each member for maximum security
- */
 export interface Group {
-  id: string;  // Unique group identifier (generated client-side)
-  name: string;  // Group display name
-  memberIDs: string[];  // List of member user IDs (static, set at creation)
-  creatorID: string;  // Who created the group
-  createdAt: number;  // Timestamp
-  messages: Array<{
-    content: string;
-    fromID: string;
-    fromUsername?: string;  // Sender's username for display
-    timestamp: number;
-    contentType?: 'text' | 'image';
-  }>;
-  lastMessage?: string;
+  id: string;
+  name: string;
+  members: string[];  // usernames
+  creator: string;    // creator username
+  createdAt: number;
+  messages: Message[];
+  unreadCount: number;
 }
 
-/**
- * Group message - contains pairwise encrypted payloads for each recipient
- */
-export interface GroupMessagePayload {
-  groupID: string;
-  encryptedPayloads: Array<{
-    toID: string;  // Recipient user ID
-    encrypted: string;  // Message encrypted for this recipient
-    signature: string;  // Signature for verification
-  }>;
+export interface Message {
+  id: string;
+  content: string;
+  from: string;       // username
+  timestamp: number;
+  contentType: ContentType;
+  status: MessageStatus;
 }
 
-export interface EncryptedMessage {
-  encrypted: string;
-  signature: string;
-}
-
-export type MessageType = 'sent' | 'received' | 'system';
 export type ContentType = 'text' | 'image';
+export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'failed';
+export type MessageDisplayType = 'sent' | 'received' | 'system';
+
+// ==================== WebSocket Messages ====================
+
+export interface WSMessage {
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface WSWelcome extends WSMessage {
+  type: 'welcome';
+  username: string;
+}
+
+export interface WSChatMessage extends WSMessage {
+  type: 'chatmessage';
+  to?: string;        // recipient username (for outgoing)
+  from?: string;      // sender username (for incoming)
+  content: string;
+  contentType: ContentType;
+  timestamp?: number;
+}
+
+export interface WSGroupMessage extends WSMessage {
+  type: 'groupmessage';
+  groupID: string;
+  from?: string;      // sender username
+  content: string;
+  contentType: ContentType;
+  timestamp?: number;
+}
+
+export interface WSGroupCreated extends WSMessage {
+  type: 'groupcreated';
+  groupID: string;
+  groupName: string;
+  members: string[];  // usernames
+  creator: string;    // creator username
+}
+
+export interface WSGroupMemberAdded extends WSMessage {
+  type: 'groupmemberadded';
+  groupID: string;
+  members: string[];  // newly added usernames
+  addedBy: string;    // username who added them
+}
+
+export interface WSSetUsername extends WSMessage {
+  type: 'setusername';
+  username: string;
+}
+
+export interface WSUsernameChanged extends WSMessage {
+  type: 'usernamechanged';
+  oldUsername: string;
+  newUsername: string;
+}
+
+export interface WSFindUser extends WSMessage {
+  type: 'finduser';
+  username: string;
+}
+
+export interface WSUserFound extends WSMessage {
+  type: 'userfound';
+  username: string;
+  isOnline: boolean;
+}
+
+export interface WSUserStatus extends WSMessage {
+  type: 'userstatus';
+  username: string;
+  isOnline: boolean;
+}
+
+export interface WSTyping extends WSMessage {
+  type: 'typing';
+  to?: string;
+  groupID?: string;
+  isTyping: boolean;
+}
+
+export interface WSError extends WSMessage {
+  type: 'error';
+  message: string;
+}
+
+// ==================== Storage Types ====================
+
+export interface StoredData {
+  version: number;
+  username: string | null;
+  contacts: Record<string, Contact>;
+  groups: Record<string, Group>;
+  settings: AppSettings;
+}
+
+export interface AppSettings {
+  notifications: boolean;
+  sounds: boolean;
+  theme: 'dark' | 'light';
+}
+
+// ==================== UI State ====================
+
+export interface AppState {
+  connected: boolean;
+  currentView: 'contact' | 'group' | null;
+  currentID: string | null;
+  typingUsers: Map<string, Set<string>>; // groupID/contactUsername -> Set of usernames typing
+}
+
+// ==================== Events ====================
+
+export type EventCallback<T = unknown> = (data: T) => void;
+
+export interface EventMap {
+  'connection:change': boolean;
+  'contact:added': Contact;
+  'contact:updated': Contact;
+  'contact:removed': string;
+  'group:added': Group;
+  'group:updated': Group;
+  'group:removed': string;
+  'message:received': { conversationID: string; message: Message; isGroup: boolean };
+  'message:sent': { conversationID: string; message: Message; isGroup: boolean };
+  'typing:update': { conversationID: string; username: string; isTyping: boolean };
+}

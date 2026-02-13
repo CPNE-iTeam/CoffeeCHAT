@@ -1,128 +1,109 @@
 /**
- * WebSocket connection management service
+ * Connection Manager - Manages WebSocket connections
  */
 
-import type { CustomWebSocket, ConnectionInfo } from '../types/index.js';
+import type { CustomWebSocket } from '../types/index.js';
 
 export class ConnectionManager {
-  private connections: Map<string, CustomWebSocket> = new Map();
-  private connectionInfo: Map<string, ConnectionInfo> = new Map();
-  private usernameHashIndex: Map<string, string> = new Map(); // hash -> userID
+  private connections: Map<string, CustomWebSocket> = new Map(); // username -> ws
+  private guestCounter = 0;
 
   /**
-   * Register a new connection
+   * Register a new connection with a guest username
    */
-  registerConnection(ws: CustomWebSocket, userID: string): void {
-    ws.userID = userID;
-    this.connections.set(userID, ws);
-    this.connectionInfo.set(userID, {
-      userID,
-      connectedAt: Date.now()
-    });
+  register(ws: CustomWebSocket): string {
+    const username = this.generateGuestUsername();
+    ws.username = username;
+    this.connections.set(username, ws);
+    console.log(`[+] User connected: ${username}`);
+    return username;
   }
 
   /**
-   * Unregister connection
+   * Unregister a connection
    */
-  unregisterConnection(userID: string): void {
-    // Remove username hash from index
-    const info = this.connectionInfo.get(userID);
-    if (info?.usernameHash) {
-      this.usernameHashIndex.delete(info.usernameHash);
-    }
-    
-    this.connections.delete(userID);
-    this.connectionInfo.delete(userID);
+  unregister(username: string): void {
+    this.connections.delete(username);
+    console.log(`[-] User disconnected: ${username}`);
   }
 
   /**
-   * Get connection by user ID
+   * Get connection by username
    */
-  getConnection(userID: string): CustomWebSocket | undefined {
-    return this.connections.get(userID);
-  }
-
-  /**
-   * Store public key for user
-   */
-  storePublicKey(userID: string, publicKey: string): void {
-    const conn = this.connections.get(userID);
-    if (conn) {
-      conn.publicKey = publicKey;
-    }
-    
-    const info = this.connectionInfo.get(userID);
-    if (info) {
-      info.publicKey = publicKey;
-    }
-  }
-
-  /**
-   * Get public key for user
-   */
-  getPublicKey(userID: string): string | undefined {
-    const conn = this.connections.get(userID);
-    return conn?.publicKey;
-  }
-
-  /**
-   * Store username hash for user (server never sees the actual username)
-   */
-  storeUsernameHash(userID: string, usernameHash: string): void {
-    const conn = this.connections.get(userID);
-    if (conn) {
-      // Remove old hash from index if exists
-      if (conn.usernameHash) {
-        this.usernameHashIndex.delete(conn.usernameHash);
-      }
-      conn.usernameHash = usernameHash;
-    }
-    
-    const info = this.connectionInfo.get(userID);
-    if (info) {
-      // Remove old hash from index if exists
-      if (info.usernameHash) {
-        this.usernameHashIndex.delete(info.usernameHash);
-      }
-      info.usernameHash = usernameHash;
-    }
-    
-    // Add to index for lookup
-    this.usernameHashIndex.set(usernameHash, userID);
-  }
-
-  /**
-   * Find user ID by username hash
-   */
-  findUserByUsernameHash(usernameHash: string): string | undefined {
-    return this.usernameHashIndex.get(usernameHash);
+  get(username: string): CustomWebSocket | undefined {
+    return this.connections.get(username);
   }
 
   /**
    * Check if user is connected
    */
-  isUserConnected(userID: string): boolean {
-    return this.connections.has(userID);
+  isConnected(username: string): boolean {
+    return this.connections.has(username);
   }
 
   /**
-   * Get all connected user IDs
+   * Change username for a connection
    */
-  getConnectedUserIDs(): string[] {
-    return Array.from(this.connections.keys());
+  changeUsername(oldUsername: string, newUsername: string): boolean {
+    // Check if new username is taken
+    if (this.connections.has(newUsername)) {
+      return false;
+    }
+
+    const ws = this.connections.get(oldUsername);
+    if (!ws) return false;
+
+    // Update connection
+    this.connections.delete(oldUsername);
+    ws.username = newUsername;
+    this.connections.set(newUsername, ws);
+    
+    console.log(`[~] Username changed: ${oldUsername} -> ${newUsername}`);
+    return true;
   }
 
   /**
-   * Get connection count
+   * Send message to a user
    */
-  getConnectionCount(): number {
-    return this.connections.size;
+  send(username: string, message: object): boolean {
+    const ws = this.connections.get(username);
+    if (ws && ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify(message));
+      return true;
+    }
+    return false;
   }
 
   /**
-   * Get connection info
+   * Broadcast to multiple users
    */
-  getConnectionInfo(userID: string): ConnectionInfo | undefined {
-    return this.connectionInfo.get(userID);
+  broadcast(usernames: string[], message: object, excludeUsername?: string): void {
+    const json = JSON.stringify(message);
+    for (const username of usernames) {
+      if (username === excludeUsername) continue;
+      
+      const ws = this.connections.get(username);
+      if (ws && ws.readyState === ws.OPEN) {
+        ws.send(json);
+      }
+    }
+  }
+
+  /**
+   * Generate unique guest username
+   */
+  private generateGuestUsername(): string {
+    this.guestCounter++;
+    const num = String(this.guestCounter).padStart(3, '0');
+    let username = `guest#${num}`;
+    
+    // Ensure uniqueness
+    while (this.connections.has(username)) {
+      this.guestCounter++;
+      const newNum = String(this.guestCounter).padStart(3, '0');
+      username = `guest#${newNum}`;
+    }
+    
+    return username;
   }
 }

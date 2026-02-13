@@ -1,381 +1,345 @@
 /**
- * CoffeeChat Server - WebSocket Relay with TLS
- * Refactored with service-oriented architecture for scalability
+ * CoffeeCHAT v2 Server - WebSocket Relay
  */
 
 import https from 'https';
 import { readFileSync } from 'fs';
-import { WebSocketServer, WebSocket } from 'ws';
-import { Utils } from './utils.js';
+import { WebSocketServer } from 'ws';
 import { ConnectionManager } from './services/ConnectionManager.js';
-import { KeyExchangeService } from './services/KeyExchangeService.js';
-import { MessageRouter } from './services/MessageRouter.js';
-import { GroupRouter } from './services/GroupRouter.js';
+import { GroupManager } from './services/GroupManager.js';
 import { MessageValidator } from './validators/MessageValidator.js';
-import type { CustomWebSocket, ServerMessage } from './types/index.js';
+import type { 
+  CustomWebSocket, ServerMessage, 
+  ChatMessage, GroupMessage, CreateGroup, AddGroupMembers,
+  SetUsername, FindUser
+} from './types/index.js';
 
-const WSS_PORT = parseInt(process.env.WSS_PORT ?? '8080', 10);
+const PORT = parseInt(process.env.WSS_PORT ?? '8080', 10);
 
 // Load TLS certificates
 const tlsOptions = {
-    cert: readFileSync('./certs/cert.pem'),
-    key: readFileSync('./certs/key.pem')
+  cert: readFileSync('./certs/cert.pem'),
+  key: readFileSync('./certs/key.pem')
 };
 
-// Create HTTPS server with TLS
+// Create HTTPS server
 const httpsServer = https.createServer(tlsOptions);
 
-// Create WebSocket server with security options
+// Create WebSocket server
 const wss = new WebSocketServer({
-    server: httpsServer,
-    perMessageDeflate: false, // Disable compression bombs
-    maxPayload: 16 * 1024 * 1024,  // Limit message size to 16MB (for encrypted images with base64 overhead)
+  server: httpsServer,
+  perMessageDeflate: false,
+  maxPayload: 16 * 1024 * 1024 // 16MB
 });
 
-// Initialize services
-const utils = new Utils();
-const connectionManager = new ConnectionManager();
-const keyExchangeService = new KeyExchangeService(connectionManager);
-const messageRouter = new MessageRouter(connectionManager);
-const groupRouter = new GroupRouter(connectionManager);
+// Services
+const connections = new ConnectionManager();
+const groups = new GroupManager();
 
-console.log(`CoffeeCHAT WebSocket server is running on wss://localhost:${WSS_PORT}`);
-
-// Basic rate limiting (token bucket)
-const RATE_LIMIT_TOKENS = 10;
-const RATE_LIMIT_INTERVAL_MS = 10_000;
-const rateLimiters = new WeakMap<CustomWebSocket, { tokens: number; lastRefill: number }>();
+// Rate limiting
+const RATE_LIMIT = 20;
+const RATE_WINDOW = 10000;
+const rateLimiters = new WeakMap<CustomWebSocket, { count: number; reset: number }>();
 
 function checkRateLimit(ws: CustomWebSocket): boolean {
-    const now = Date.now();
-    const state = rateLimiters.get(ws);
-    if (!state) {
-        rateLimiters.set(ws, { tokens: RATE_LIMIT_TOKENS - 1, lastRefill: now });
-        return true;
-    }
-
-    const elapsed = now - state.lastRefill;
-    if (elapsed >= RATE_LIMIT_INTERVAL_MS) {
-        state.tokens = RATE_LIMIT_TOKENS;
-        state.lastRefill = now;
-    }
-
-    if (state.tokens <= 0) {
-        return false;
-    }
-
-    state.tokens -= 1;
+  const now = Date.now();
+  let state = rateLimiters.get(ws);
+  
+  if (!state || now > state.reset) {
+    state = { count: 1, reset: now + RATE_WINDOW };
+    rateLimiters.set(ws, state);
     return true;
+  }
+  
+  if (state.count >= RATE_LIMIT) {
+    return false;
+  }
+  
+  state.count++;
+  return true;
 }
 
-/**
- * Handle new WebSocket connection
- */
+function sendError(ws: CustomWebSocket, message: string): void {
+  if (ws.readyState === ws.OPEN) {
+    ws.send(JSON.stringify({ type: 'error', message }));
+  }
+}
+
+// ==================== Connection Handler ====================
+
 wss.on('connection', (ws: CustomWebSocket) => {
-    // Generate unique ID for this user
-    const userID = utils.generateUniqueID((id) => connectionManager.isUserConnected(id));
-    
-    // Register connection
-    connectionManager.registerConnection(ws, userID);
-    rateLimiters.set(ws, { tokens: RATE_LIMIT_TOKENS, lastRefill: Date.now() });
-    
-    // Send welcome message
-    ws.send(JSON.stringify({ type: 'welcome', userID }));
+  // Register with auto-generated guest username
+  const username = connections.register(ws);
+  
+  // Send welcome with username
+  ws.send(JSON.stringify({ type: 'welcome', username }));
+  
+  // Heartbeat
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  
+  const pingInterval = setInterval(() => {
+    if (!ws.isAlive) {
+      ws.terminate();
+      return;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }, 30000);
 
-    // Connection timeout handling (heartbeat)
-    ws.isAlive = true;
-    ws.on('pong', () => {
-        ws.isAlive = true;
-    });
+  // Message handler
+  ws.on('message', (data) => {
+    if (!checkRateLimit(ws)) {
+      sendError(ws, 'Rate limited');
+      return;
+    }
 
-    const pingInterval = setInterval(() => {
-        if (ws.isAlive === false) {
-            ws.terminate();
-            return;
-        }
-        ws.isAlive = false;
-        ws.ping();
-    }, 30_000);
+    let msg: ServerMessage;
+    try {
+      msg = JSON.parse(data.toString());
+    } catch {
+      return;
+    }
 
-    /**
-     * Handle incoming messages
-     */
-    ws.on('message', (messageStr: any) => {
-        if (!checkRateLimit(ws)) {
-            sendError(ws, 'Rate limited');
-            return;
-        }
+    if (!msg.type) return;
 
-        let messageObj: ServerMessage;
-        
-        // Parse message
-        try {
-            messageObj = JSON.parse(messageStr.toString());
-        } catch (e) {
-            return; // Silently ignore malformed messages
-        }
-        
-        if (!messageObj.type) {
-            return; // Silently ignore messages without type
-        }
+    switch (msg.type) {
+      case 'chatmessage':
+        handleChatMessage(ws, msg as ChatMessage);
+        break;
+      case 'groupmessage':
+        handleGroupMessage(ws, msg as GroupMessage);
+        break;
+      case 'creategroup':
+        handleCreateGroup(ws, msg as CreateGroup);
+        break;
+      case 'addgroupmembers':
+        handleAddMembers(ws, msg as AddGroupMembers);
+        break;
+      case 'setusername':
+        handleSetUsername(ws, msg as SetUsername);
+        break;
+      case 'finduser':
+        handleFindUser(ws, msg as FindUser);
+        break;
+      case 'ping':
+        // Heartbeat - no action needed
+        break;
+    }
+  });
 
-        const messageType = messageObj.type;
-          // Route message to appropriate handler
-        switch (messageType) {
-            case 'publickey':
-                handlePublicKey(ws, messageObj);
-                break;
+  // Close handler
+  ws.on('close', () => {
+    clearInterval(pingInterval);
+    if (ws.username) {
+      connections.unregister(ws.username);
+    }
+  });
 
-            case 'keyexchange':
-                handleKeyExchange(ws, messageObj);
-                break;
-
-            case 'chatmessage':
-                handleChatMessage(ws, messageObj);
-                break;
-
-            case 'setusername':
-                handleSetUsername(ws, messageObj);
-                break;            case 'finduser':
-                handleFindUser(ws, messageObj);
-                break;
-
-            case 'creategroup':
-                handleCreateGroup(ws, messageObj);
-                break;
-
-            case 'groupmessage':
-                handleGroupMessage(ws, messageObj);
-                break;
-
-            default:
-                // Unknown message type - silently ignore
-                break;
-        }
-    });    /**
-     * Handle connection close
-     */
-    ws.on('close', () => {
-        clearInterval(pingInterval);
-        if (ws.userID) {
-            connectionManager.unregisterConnection(ws.userID);
-        }
-    });
-
-    /**
-     * Handle WebSocket errors (e.g., payload too large)
-     */
-    ws.on('error', (error: Error & { code?: string }) => {
-        if (error.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
-            sendError(ws, 'Message too large. Max size is 10MB.');
-        } else {
-            console.error(`WebSocket error for ${ws.userID}:`, error.message);
-        }
-        // Don't crash - let the close handler clean up
-    });
+  // Error handler
+  ws.on('error', (error: Error & { code?: string }) => {
+    if (error.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH') {
+      sendError(ws, 'Message too large');
+    }
+  });
 });
 
-/**
- * Handle public key storage
- */
-function handlePublicKey(ws: CustomWebSocket, message: ServerMessage): void {
-    if (!ws.userID) {
-        sendError(ws, 'Sender user ID is missing');
-        return;
-    }
+// ==================== Message Handlers ====================
 
-    if (!MessageValidator.validatePublicKey(message.publicKey)) {
-        sendError(ws, 'Invalid public key format');
-        return;
-    }
+function handleChatMessage(ws: CustomWebSocket, msg: ChatMessage): void {
+  if (!ws.username) return;
+  
+  if (!MessageValidator.validateUsername(msg.to)) {
+    sendError(ws, 'Invalid recipient');
+    return;
+  }
+  
+  if (!MessageValidator.validateContent(msg.content)) {
+    sendError(ws, 'Invalid message content');
+    return;
+  }
 
-    keyExchangeService.storePublicKey(ws.userID, message.publicKey);
+  const contentType = MessageValidator.validateContentType(msg.contentType) 
+    ? msg.contentType 
+    : 'text';
+
+  connections.send(msg.to, {
+    type: 'chatmessage',
+    from: ws.username,
+    content: msg.content,
+    contentType,
+    timestamp: Date.now()
+  });
 }
 
-/**
- * Handle key exchange request
- */
-function handleKeyExchange(ws: CustomWebSocket, message: ServerMessage): void {
-    // Validate inputs
-    if (!MessageValidator.validateUserID(message.toID)) {
-        sendError(ws, 'Invalid recipient ID');
-        return;
-    }
-    
-    if (!MessageValidator.validatePublicKey(message.publicKey)) {
-        sendError(ws, 'Invalid public key format');
-        return;
-    }
-    
-    if (!ws.userID) {
-        sendError(ws, 'Sender user ID is missing');
-        return;
-    }
+function handleGroupMessage(ws: CustomWebSocket, msg: GroupMessage): void {
+  if (!ws.username) return;
+  
+  if (!MessageValidator.validateGroupID(msg.groupID)) {
+    sendError(ws, 'Invalid group');
+    return;
+  }
+  
+  if (!MessageValidator.validateContent(msg.content)) {
+    sendError(ws, 'Invalid message content');
+    return;
+  }
 
-    // Process key exchange
-    keyExchangeService.handleKeyExchange(ws, message.toID, message.publicKey);
+  // Check if user is a member
+  if (!groups.isMember(msg.groupID, ws.username)) {
+    sendError(ws, 'Not a member of this group');
+    return;
+  }
+
+  const contentType = MessageValidator.validateContentType(msg.contentType) 
+    ? msg.contentType 
+    : 'text';
+
+  const members = groups.getMembers(msg.groupID);
+  
+  connections.broadcast(members, {
+    type: 'groupmessage',
+    groupID: msg.groupID,
+    from: ws.username,
+    content: msg.content,
+    contentType,
+    timestamp: Date.now()
+  }, ws.username); // Exclude sender
 }
 
-/**
- * Handle encrypted chat message
- */
-function handleChatMessage(ws: CustomWebSocket, message: ServerMessage): void {
-    // Validate inputs
-    if (!MessageValidator.validateUserID(message.toID)) {
-        sendError(ws, 'Invalid recipient ID');
-        return;
-    }
-    
-    if (!MessageValidator.validateEncryptedMessage(message.encrypted)) {
-        sendError(ws, 'Invalid message format');
-        return;
-    }
-    
-    if (message.signature && !MessageValidator.validateSignature(message.signature)) {
-        sendError(ws, 'Invalid signature format');
-        return;
-    }
-    
-    if (!ws.userID) {
-        sendError(ws, 'Sender user ID is missing');
-        return;
-    }
+function handleCreateGroup(ws: CustomWebSocket, msg: CreateGroup): void {
+  if (!ws.username) return;
+  
+  if (!MessageValidator.validateGroupID(msg.groupID)) {
+    sendError(ws, 'Invalid group ID');
+    return;
+  }
+  
+  if (!MessageValidator.validateGroupName(msg.groupName)) {
+    sendError(ws, 'Invalid group name');
+    return;
+  }
+  
+  if (!MessageValidator.validateMembers(msg.members)) {
+    sendError(ws, 'Invalid member list');
+    return;
+  }
 
-    // Route message to recipient
-    messageRouter.routeMessage(ws, message.toID, message.encrypted!, message.signature);
+  // Ensure creator is in members
+  if (!msg.members.includes(ws.username)) {
+    msg.members.push(ws.username);
+  }
+
+  // Store group
+  groups.set({
+    id: msg.groupID,
+    name: msg.groupName,
+    members: msg.members,
+    creator: ws.username
+  });
+
+  // Notify all members (except creator)
+  connections.broadcast(msg.members, {
+    type: 'groupcreated',
+    groupID: msg.groupID,
+    groupName: msg.groupName,
+    members: msg.members,
+    creator: ws.username
+  }, ws.username);
 }
 
-/**
- * Send error message to client
- */
-function sendError(ws: CustomWebSocket, message: string): void {
+function handleAddMembers(ws: CustomWebSocket, msg: AddGroupMembers): void {
+  if (!ws.username) return;
+  
+  if (!MessageValidator.validateGroupID(msg.groupID)) {
+    sendError(ws, 'Invalid group');
+    return;
+  }
+  
+  if (!MessageValidator.validateMembers(msg.members)) {
+    sendError(ws, 'Invalid member list');
+    return;
+  }
+
+  // Check if user is a member
+  if (!groups.isMember(msg.groupID, ws.username)) {
+    sendError(ws, 'Not a member of this group');
+    return;
+  }
+
+  const group = groups.get(msg.groupID);
+  if (!group) {
+    sendError(ws, 'Group not found');
+    return;
+  }
+
+  // Add members
+  groups.addMembers(msg.groupID, msg.members);
+
+  // Get updated member list
+  const allMembers = groups.getMembers(msg.groupID);
+
+  // Notify existing members about new members
+  connections.broadcast(allMembers, {
+    type: 'groupmemberadded',
+    groupID: msg.groupID,
+    members: msg.members,
+    addedBy: ws.username
+  });
+
+  // Send full group info to new members
+  for (const newMember of msg.members) {
+    connections.send(newMember, {
+      type: 'groupcreated',
+      groupID: group.id,
+      groupName: group.name,
+      members: allMembers,
+      creator: group.creator
+    });
+  }
+}
+
+function handleSetUsername(ws: CustomWebSocket, msg: SetUsername): void {
+  if (!ws.username) return;
+  
+  if (!MessageValidator.validateUsername(msg.username)) {
+    sendError(ws, 'Invalid username format');
+    return;
+  }
+
+  const oldUsername = ws.username;
+  const success = connections.changeUsername(oldUsername, msg.username);
+  
+  if (success) {
     ws.send(JSON.stringify({
-        type: 'error',
-        message
+      type: 'usernamechanged',
+      oldUsername,
+      newUsername: msg.username
     }));
+  } else {
+    sendError(ws, 'Username already taken');
+  }
 }
 
-/**
- * Handle setting username hash (privacy-preserving - server never sees actual username)
- */
-function handleSetUsername(ws: CustomWebSocket, message: ServerMessage): void {
-    if (!ws.userID) {
-        sendError(ws, 'User ID is missing');
-        return;
-    }
+function handleFindUser(ws: CustomWebSocket, msg: FindUser): void {
+  if (!ws.username) return;
+  
+  if (!MessageValidator.validateUsername(msg.username)) {
+    sendError(ws, 'Invalid username');
+    return;
+  }
 
-    if (!MessageValidator.validateUsernameHash(message.usernameHash)) {
-        sendError(ws, 'Invalid username hash format');
-        return;
-    }
-
-    connectionManager.storeUsernameHash(ws.userID, message.usernameHash);
-    
-    // Confirm username hash was set
-    ws.send(JSON.stringify({
-        type: 'usernameSet',
-        usernameHash: message.usernameHash
-    }));
+  const isOnline = connections.isConnected(msg.username);
+  
+  ws.send(JSON.stringify({
+    type: 'userfound',
+    username: msg.username,
+    isOnline
+  }));
 }
 
-/**
- * Handle finding user by username hash
- */
-function handleFindUser(ws: CustomWebSocket, message: ServerMessage): void {
-    if (!MessageValidator.validateUsernameHash(message.usernameHash)) {
-        sendError(ws, 'Invalid username hash format');
-        return;
-    }
+// ==================== Start Server ====================
 
-    const userID = connectionManager.findUserByUsernameHash(message.usernameHash);
-    
-    ws.send(JSON.stringify({
-        type: 'userFound',
-        usernameHash: message.usernameHash,
-        userID: userID || null  // null if not found
-    }));
-}
-
-/**
- * Handle group creation - route to all members
- */
-function handleCreateGroup(ws: CustomWebSocket, message: ServerMessage): void {
-    if (!ws.userID) {
-        sendError(ws, 'User ID is missing');
-        return;
-    }
-
-    if (!message.groupID || typeof message.groupID !== 'string' || message.groupID.length < 10) {
-        sendError(ws, 'Invalid group ID');
-        return;
-    }
-
-    if (!message.groupName || typeof message.groupName !== 'string' || message.groupName.length < 1) {
-        sendError(ws, 'Invalid group name');
-        return;
-    }
-
-    if (!Array.isArray(message.memberIDs) || message.memberIDs.length < 2) {
-        sendError(ws, 'Group must have at least 2 members');
-        return;
-    }
-
-    // Validate all member IDs
-    for (const memberID of message.memberIDs) {
-        if (!MessageValidator.validateUserID(memberID)) {
-            sendError(ws, 'Invalid member ID');
-            return;
-        }
-    }
-
-    // Route group creation to all members
-    groupRouter.routeGroupCreation(
-        ws,
-        message.groupID,
-        message.groupName,
-        message.memberIDs,
-        ws.userID
-    );
-}
-
-/**
- * Handle group message - route encrypted payloads to recipients
- */
-function handleGroupMessage(ws: CustomWebSocket, message: ServerMessage): void {
-    if (!ws.userID) {
-        sendError(ws, 'User ID is missing');
-        return;
-    }
-
-    if (!message.groupID || typeof message.groupID !== 'string') {
-        sendError(ws, 'Invalid group ID');
-        return;
-    }
-
-    if (!Array.isArray(message.encryptedPayloads) || message.encryptedPayloads.length === 0) {
-        sendError(ws, 'Invalid encrypted payloads');
-        return;
-    }
-
-    // Validate each payload
-    for (const payload of message.encryptedPayloads) {
-        if (!MessageValidator.validateUserID(payload.toID)) {
-            sendError(ws, 'Invalid recipient ID in payload');
-            return;
-        }
-        if (!MessageValidator.validateEncryptedMessage(payload.encrypted)) {
-            sendError(ws, 'Invalid encrypted message in payload');
-            return;
-        }
-        if (!MessageValidator.validateSignature(payload.signature)) {
-            sendError(ws, 'Invalid signature in payload');
-            return;
-        }
-    }
-
-    // Route to all recipients
-    groupRouter.routeGroupMessage(ws, message.groupID, message.encryptedPayloads);
-}
-
-// Start server
-httpsServer.listen(WSS_PORT);
+httpsServer.listen(PORT, () => {
+  console.log(`☕ CoffeeCHAT v2 server running on wss://localhost:${PORT}`);
+});

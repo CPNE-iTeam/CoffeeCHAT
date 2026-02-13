@@ -1,25 +1,19 @@
 {
-  "name": "server",
-  "version": "1.0.0",
-  "description": "",
-  "main": "main.ts",
+  "name": "coffeechat-v2-server",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/main.js",
     "dev": "tsc && node dist/main.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "dependencies": {
-    "express": "^5.2.1",
-    "ws": "^8.19.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/express": "^5.0.6",
-    "@types/node": "^25.2.1",
+    "@types/node": "^22.15.18",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.7.3"
   }
 }

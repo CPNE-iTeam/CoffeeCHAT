@@ -1,366 +1,268 @@
 /**
- * Chat UI management
+ * Chat UI - Manages the main chat interface
  */
 
-import type { Contact, MessageType, ContentType } from '../types';
-import { ImageService } from '../services/ImageService';
+import type { Message, MessageDisplayType, ContentType, Contact, Group } from '../types';
+import { imageService } from '../services/ImageService';
+import { formatTime, formatFullTime, escapeHtml, getInitials, stringToColor } from '../utils/helpers';
 
 export class ChatUI {
-  private statusEl: HTMLElement;
-  private currentChatInfo: HTMLElement;
-  private messagesContainer: HTMLElement;
-  private messageInput: HTMLInputElement;
-  private sendBtn: HTMLButtonElement;
-  private blockBtn: HTMLButtonElement;
-  private imageBtn: HTMLButtonElement | null = null;
-  private imageService: ImageService;
-
-  // Track blob URLs for cleanup
-  private activeBlobUrls: Set<string> = new Set();
+  private elements: {
+    header: HTMLElement;
+    chatName: HTMLElement;
+    chatSubtitle: HTMLElement;
+    messagesContainer: HTMLElement;
+    messageInput: HTMLInputElement;
+    sendBtn: HTMLButtonElement;
+    imageBtn: HTMLButtonElement;
+    blockBtn: HTMLButtonElement;
+    addMemberBtn: HTMLButtonElement;
+  };
 
   constructor() {
-    this.statusEl = document.getElementById('status') as HTMLElement;
-    this.currentChatInfo = document.getElementById('currentChatInfo') as HTMLElement;
-    this.messagesContainer = document.getElementById('messages') as HTMLElement;
-    this.messageInput = document.getElementById('messageInput') as HTMLInputElement;
-    this.sendBtn = document.getElementById('sendBtn') as HTMLButtonElement;
-    this.blockBtn = document.getElementById('blockBtn') as HTMLButtonElement;
-    this.imageBtn = document.getElementById('imageBtn') as HTMLButtonElement;
-    this.imageService = new ImageService();
+    this.elements = {
+      header: document.getElementById('chatHeader')!,
+      chatName: document.querySelector('.chat-name')!,
+      chatSubtitle: document.querySelector('.chat-subtitle')!,
+      messagesContainer: document.getElementById('messagesContainer')!,
+      messageInput: document.getElementById('messageInput') as HTMLInputElement,
+      sendBtn: document.getElementById('sendBtn') as HTMLButtonElement,
+      imageBtn: document.getElementById('imageBtn') as HTMLButtonElement,
+      blockBtn: document.getElementById('blockBtn') as HTMLButtonElement,
+      addMemberBtn: document.getElementById('addMemberBtn') as HTMLButtonElement
+    };
   }
 
   /**
-   * Update connection status display
+   * Show empty state
    */
-  updateStatus(status: string, isConnected: boolean): void {
-    this.statusEl.textContent = status;
-    this.statusEl.className = isConnected ? 'status connected' : 'status disconnected';
+  showEmptyState(): void {
+    this.elements.chatName.textContent = 'Select a conversation';
+    this.elements.chatSubtitle.textContent = '';
+    this.elements.messagesContainer.innerHTML = `
+      <div class="empty-state">
+        <span class="emoji">☕</span>
+        <p>Start a conversation</p>
+      </div>
+    `;
+    this.setInputEnabled(false);
+    this.elements.blockBtn.classList.add('hidden');
+    this.elements.addMemberBtn.classList.add('hidden');
   }
 
   /**
-   * Update chat header
+ * Show contact chat
    */
-  updateChatHeader(
-    contactID: string | null,
-    isBlocked: boolean,
-    hasPublicKey: boolean
-  ): void {
-    if (!contactID) {
-      this.currentChatInfo.innerHTML = '<span class="chat-title">Select a contact to start chatting</span>';
-      this.messageInput.disabled = true;
-      this.sendBtn.disabled = true;
-      this.setImageButtonEnabled(false);
-      this.blockBtn.style.display = 'none';
+  showContact(contact: Contact, myUsername: string): void {
+    const displayName = contact.displayName || contact.username;
+    this.elements.chatName.textContent = displayName;
+    this.elements.chatSubtitle.textContent = contact.username;
+    
+    this.elements.blockBtn.classList.remove('hidden');
+    this.elements.blockBtn.textContent = contact.blocked ? '✓ Unblock' : '🚫';
+    this.elements.blockBtn.title = contact.blocked ? 'Unblock user' : 'Block user';
+    
+    this.elements.addMemberBtn.classList.add('hidden');
+    
+    this.setInputEnabled(!contact.blocked);
+    this.renderMessages(contact.messages, myUsername);
+  }
+
+  /**
+   * Show group chat
+   */
+  showGroup(group: Group, myUsername: string): void {
+    this.elements.chatName.textContent = group.name;
+    this.elements.chatSubtitle.textContent = `${group.members.length} members`;
+    
+    this.elements.blockBtn.classList.add('hidden');
+    this.elements.addMemberBtn.classList.remove('hidden');
+    
+    this.setInputEnabled(true);
+    this.renderMessages(group.messages, myUsername, true);
+  }
+
+  /**
+   * Render messages
+   */
+  private renderMessages(messages: Message[], myUsername: string, isGroup = false): void {
+    this.elements.messagesContainer.innerHTML = '';
+    
+    if (messages.length === 0) {
+      this.elements.messagesContainer.innerHTML = `
+        <div class="empty-state">
+          <span class="emoji">💬</span>
+          <p>No messages yet</p>
+        </div>
+      `;
       return;
     }
 
-    // Show block button
-    this.blockBtn.style.display = 'block';
-    this.blockBtn.textContent = isBlocked ? 'Unblock' : 'Block';
-    this.blockBtn.className = isBlocked ? 'block-btn blocked' : 'block-btn';
-
-    // Update input state
-    const canSend = !isBlocked && hasPublicKey;
-    this.messageInput.disabled = isBlocked;
-    this.sendBtn.disabled = isBlocked;
-    this.setImageButtonEnabled(canSend);
-
-    if (isBlocked) {
-      this.messageInput.placeholder = 'User is blocked';
-    } else if (!hasPublicKey) {
-      this.messageInput.placeholder = 'Requesting secure key exchange...';
-    } else {
-      this.messageInput.placeholder = 'Type your message...';
-    }
-
-    let headerHTML = `
-      <div class="chat-header-content">
-        <div class="chat-subtitle">${contactID}${isBlocked ? ' 🚫' : ''}</div>
-    `;
-
-    if (!hasPublicKey) {
-      headerHTML += '<div class="fingerprint-header"><span class="text-secondary">⏳ Exchanging keys...</span></div>';
-    }
-
-    headerHTML += '</div>';
-    this.currentChatInfo.innerHTML = headerHTML;
-  }
-
-  /**
-   * Update chat header for group view
-   */
-  updateGroupHeader(groupName: string, memberCount: number): void {
-    // Hide block button in group view
-    this.blockBtn.style.display = 'none';
-
-    // Enable messaging in groups
-    this.messageInput.disabled = false;
-    this.sendBtn.disabled = false;
-    this.setImageButtonEnabled(true);
-    this.messageInput.placeholder = 'Type your message...';
-
-    const headerHTML = `
-      <div class="chat-header-content">
-        <div class="chat-title">${groupName}</div>
-        <div class="chat-subtitle">${memberCount} members</div>
-      </div>
-    `;
-    this.currentChatInfo.innerHTML = headerHTML;
-  }
-
-  /**
-   * Add message to chat
-   */
-  addMessage(content: string, type: MessageType, contentType: ContentType = 'text'): void {
-    const messageEl = document.createElement('div');
-    messageEl.className = `message ${type}`;
-
-    const contentEl = document.createElement('div');
-    contentEl.className = 'message-content';
-
-    if (contentType === 'image' && this.imageService.isImageMessage(content)) {
-      // Handle image message
-      const imageData = this.imageService.extractImageData(content);
-      if (imageData) {
-        try {
-          const blobUrl = this.imageService.createSecureBlobUrl(imageData);
-          this.activeBlobUrls.add(blobUrl);
-
-          const imgContainer = document.createElement('div');
-          imgContainer.className = 'image-message-container';
-
-          const img = document.createElement('img');
-          img.className = 'message-image';
-          img.src = blobUrl;
-          img.alt = 'Encrypted image';
-          img.loading = 'lazy';
-          
-          // Click to view full size
-          img.addEventListener('click', () => this.showImageModal(blobUrl));
-
-          // Add loading state
-          img.addEventListener('load', () => {
-            imgContainer.classList.add('loaded');
-          });
-
-          img.addEventListener('error', () => {
-            imgContainer.innerHTML = '<span class="image-error">⚠️ Failed to load image</span>';
-          });
-
-          imgContainer.appendChild(img);
-          contentEl.appendChild(imgContainer);
-        } catch {
-          contentEl.innerHTML = '<span class="image-error">⚠️ Invalid image data</span>';
-        }
-      }
-    } else {
-      // Regular text message
-      contentEl.textContent = content;
-    }
-
-    messageEl.appendChild(contentEl);
-    this.messagesContainer.appendChild(messageEl);
-    this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
-  }
-
-  /**
-   * Show image in fullscreen modal
-   */
-  private showImageModal(imageUrl: string): void {
-    const modal = document.createElement('div');
-    modal.className = 'image-modal';
-    
-    const img = document.createElement('img');
-    img.src = imageUrl;
-    img.alt = 'Full size image';
-    
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'image-modal-close';
-    closeBtn.innerHTML = '✕';
-    closeBtn.addEventListener('click', () => modal.remove());
-
-    // Close on backdrop click
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) modal.remove();
+    messages.forEach(msg => {
+      const type: MessageDisplayType = msg.from === myUsername ? 'sent' : 'received';
+      this.addMessage(msg, type, isGroup);
     });
 
-    // Close on Escape key
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        modal.remove();
-        document.removeEventListener('keydown', handleEscape);
-      }
-    };
-    document.addEventListener('keydown', handleEscape);
+    this.scrollToBottom();
+  }
 
-    modal.appendChild(img);
-    modal.appendChild(closeBtn);
-    document.body.appendChild(modal);
+  /**
+   * Add a single message to the UI
+   */
+  addMessage(message: Message, type: MessageDisplayType, showSender = false): void {
+    const el = document.createElement('div');
+    el.className = `message ${type}`;
+    el.dataset.messageId = message.id;
+
+    let html = '';
+
+    // Show sender name for group messages
+    if (showSender && type === 'received') {
+      const senderName = message.from;
+      const color = stringToColor(message.from);
+      html += `<div class="message-sender" style="color: ${color}">${escapeHtml(senderName)}</div>`;
+    }
+
+    // Content
+    if (message.contentType === 'image' && imageService.isImageContent(message.content)) {
+      const blobUrl = imageService.createBlobUrl(message.content);
+      html += `<img class="message-image" src="${blobUrl}" alt="Image" loading="lazy">`;
+    } else {
+      html += `<div class="message-content">${escapeHtml(message.content)}</div>`;
+    }
+
+    // Timestamp
+    html += `<div class="message-time" title="${formatFullTime(message.timestamp)}">${formatTime(message.timestamp)}</div>`;
+
+    el.innerHTML = html;
+
+    // Image click handler
+    const img = el.querySelector('.message-image');
+    if (img) {
+      img.addEventListener('click', () => this.showImageModal(img.getAttribute('src')!));
+    }
+
+    this.elements.messagesContainer.appendChild(el);
   }
 
   /**
    * Add system message
    */
   addSystemMessage(content: string): void {
-    this.addMessage(content, 'system');
+    const el = document.createElement('div');
+    el.className = 'message system';
+    el.innerHTML = `<div class="message-content">${escapeHtml(content)}</div>`;
+    this.elements.messagesContainer.appendChild(el);
+    this.scrollToBottom();
   }
 
   /**
-   * Add group message to chat with sender info
+   * Scroll to bottom of messages
    */
-  addGroupMessage(content: string, fromID: string, fromUsername: string, type: MessageType, contentType: ContentType = 'text'): void {
-    const messageEl = document.createElement('div');
-    messageEl.className = `message ${type}`;
-
-    // Add sender info for received messages
-    if (type === 'received') {
-      const senderEl = document.createElement('div');
-      senderEl.className = 'message-sender';
-      senderEl.textContent = fromUsername || fromID.substring(0, 8);
-      messageEl.appendChild(senderEl);
-    }
-
-    const contentEl = document.createElement('div');
-    contentEl.className = 'message-content';
-
-    if (contentType === 'image' && this.imageService.isImageMessage(content)) {
-      // Handle image message
-      const imageData = this.imageService.extractImageData(content);
-      if (imageData) {
-        try {
-          const blobUrl = this.imageService.createSecureBlobUrl(imageData);
-          this.activeBlobUrls.add(blobUrl);
-
-          const imgContainer = document.createElement('div');
-          imgContainer.className = 'image-message-container';
-
-          const img = document.createElement('img');
-          img.className = 'message-image';
-          img.src = blobUrl;
-          img.alt = 'Encrypted image';
-          img.loading = 'lazy';
-          
-          img.addEventListener('click', () => this.showImageModal(blobUrl));
-          img.addEventListener('load', () => imgContainer.classList.add('loaded'));
-          img.addEventListener('error', () => {
-            imgContainer.innerHTML = '<span class="image-error">⚠️ Failed to load image</span>';
-          });
-
-          imgContainer.appendChild(img);
-          contentEl.appendChild(imgContainer);
-        } catch {
-          contentEl.innerHTML = '<span class="image-error">⚠️ Invalid image data</span>';
-        }
-      }
-    } else {
-      // Regular text message
-      contentEl.textContent = content;
-    }
-
-    messageEl.appendChild(contentEl);
-    this.messagesContainer.appendChild(messageEl);
-    this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+  scrollToBottom(): void {
+    this.elements.messagesContainer.scrollTop = this.elements.messagesContainer.scrollHeight;
   }
 
   /**
-   * Clear all messages
+   * Clear messages
    */
   clearMessages(): void {
-    // Revoke all blob URLs to free memory
-    this.activeBlobUrls.forEach(url => this.imageService.revokeBlobUrl(url));
-    this.activeBlobUrls.clear();
-    
-    this.messagesContainer.innerHTML = '';
+    imageService.revokeAll();
+    this.elements.messagesContainer.innerHTML = '';
   }
 
   /**
-   * Render all messages from contact
+   * Enable/disable input
    */
-  renderMessages(contact: Contact, myID: string): void {
-    this.clearMessages();
+  setInputEnabled(enabled: boolean): void {
+    this.elements.messageInput.disabled = !enabled;
+    this.elements.sendBtn.disabled = !enabled;
+    this.elements.imageBtn.disabled = !enabled;
     
-    contact.messages.forEach((msg) => {
-      const type = msg.fromID === myID ? 'sent' : 'received';
-      const contentType = msg.contentType || 'text';
-      this.addMessage(msg.content, type, contentType);
-    });
+    if (enabled) {
+      this.elements.messageInput.placeholder = 'Type a message...';
+    } else {
+      this.elements.messageInput.placeholder = 'Select a conversation';
+    }
   }
 
   /**
-   * Get message input value
+   * Get input value
    */
-  getMessageInput(): string {
-    return this.messageInput.value;
+  getInputValue(): string {
+    return this.elements.messageInput.value.trim();
   }
 
   /**
-   * Clear message input
+   * Clear input
    */
-  clearMessageInput(): void {
-    this.messageInput.value = '';
+  clearInput(): void {
+    this.elements.messageInput.value = '';
   }
+
   /**
-   * Setup event listeners
+   * Focus input
    */
-  onSendMessage(handler: () => void): void {
-    this.sendBtn.addEventListener('click', handler);
+  focusInput(): void {
+    this.elements.messageInput.focus();
+  }
+
+  /**
+   * Show image in fullscreen modal
+   */
+  private showImageModal(src: string): void {
+    const modal = document.getElementById('imageModal')!;
+    const img = document.getElementById('imageModalImg') as HTMLImageElement;
     
-    this.messageInput.addEventListener('keypress', (e) => {
+    img.src = src;
+    modal.classList.remove('hidden');
+
+    const closeHandler = () => {
+      modal.classList.add('hidden');
+      modal.removeEventListener('click', closeHandler);
+    };
+
+    modal.addEventListener('click', closeHandler);
+  }
+
+  /**
+   * Set up event listeners
+   */
+  onSend(handler: () => void): void {
+    this.elements.sendBtn.addEventListener('click', handler);
+    this.elements.messageInput.addEventListener('keypress', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         handler();
       }
     });
   }
-  /**
-   * Setup image button listener
-   */
-  onSendImage(handler: () => void): void {
-    if (this.imageBtn) {
-      this.imageBtn.addEventListener('click', handler);
-    }
-  }
-  /**
-   * Setup paste image listener
-   * Allows users to paste images from clipboard (Ctrl+V)
-   */
-  onPasteImage(handler: (file: File) => void): void {
-    // Single document-level listener to avoid duplicate handling
-    document.addEventListener('paste', (e: ClipboardEvent) => {
-      // Skip if focus is in contact input
-      const target = e.target as HTMLElement;
-      if (target.id === 'newContactID') return;
 
+  onSendImage(handler: () => void): void {
+    this.elements.imageBtn.addEventListener('click', handler);
+  }
+
+  onBlock(handler: () => void): void {
+    this.elements.blockBtn.addEventListener('click', handler);
+  }
+
+  onAddMember(handler: () => void): void {
+    this.elements.addMemberBtn.addEventListener('click', handler);
+  }
+
+  onPaste(handler: (file: File) => void): void {
+    document.addEventListener('paste', (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (!items) return;
 
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           e.preventDefault();
-          e.stopPropagation();
           const file = item.getAsFile();
-          if (file) {
-            handler(file);
-          }
+          if (file) handler(file);
           return;
         }
       }
     });
-  }
-
-  /**
-   * Enable/disable image button
-   */
-  setImageButtonEnabled(enabled: boolean): void {
-    if (this.imageBtn) {
-      this.imageBtn.disabled = !enabled;
-    }
-  }
-
-  /**
-   * Setup block button listener
-   */
-  onBlockContact(handler: () => void): void {
-    this.blockBtn.addEventListener('click', handler);
   }
 }
