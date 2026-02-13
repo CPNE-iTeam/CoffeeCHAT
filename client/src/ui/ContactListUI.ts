@@ -6,15 +6,17 @@ import type { Contact } from '../types';
 
 export class ContactListUI {
   private contactsList: HTMLElement;
-  private newContactIDInput: HTMLInputElement;
-  private addContactBtn: HTMLButtonElement;
-  private copyBtn: HTMLButtonElement;
+  private usernameInput: HTMLInputElement;
+  private setUsernameBtn: HTMLButtonElement;
+  private findUsernameInput: HTMLInputElement;
+  private findUserBtn: HTMLButtonElement;
 
   constructor() {
     this.contactsList = document.getElementById('contactsList') as HTMLElement;
-    this.newContactIDInput = document.getElementById('newContactID') as HTMLInputElement;
-    this.addContactBtn = document.getElementById('addContactBtn') as HTMLButtonElement;
-    this.copyBtn = document.getElementById('copyBtn') as HTMLButtonElement;
+    this.usernameInput = document.getElementById('usernameInput') as HTMLInputElement;
+    this.setUsernameBtn = document.getElementById('setUsernameBtn') as HTMLButtonElement;
+    this.findUsernameInput = document.getElementById('findUsernameInput') as HTMLInputElement;
+    this.findUserBtn = document.getElementById('findUserBtn') as HTMLButtonElement;
   }
 
   /**
@@ -37,12 +39,12 @@ export class ContactListUI {
       
       if (contact.blocked) {
         contactEl.classList.add('blocked');
-      }
-
-      const nameEl = document.createElement('div');
+      }      const nameEl = document.createElement('div');
       nameEl.className = 'contact-name';
       
-      const displayName = contact.id.substring(0, 12) + (contact.id.length > 12 ? '...' : '');
+      // Show username if available, otherwise show truncated ID
+      const displayName = contact.username || 
+        (contact.id.substring(0, 12) + (contact.id.length > 12 ? '...' : ''));
       
       let statusIndicator = '';
       if (contact.blocked) {
@@ -66,33 +68,31 @@ export class ContactListUI {
 
       contactEl.addEventListener('click', () => {
         onContactClick(contact.id);
-      });
-
-      this.contactsList.appendChild(contactEl);
+      });      this.contactsList.appendChild(contactEl);
     });
   }
 
   /**
-   * Get new contact ID input value
+   * Get username input value
    */
-  getNewContactInput(): string {
-    return this.newContactIDInput.value.trim();
+  getUsernameInput(): string {
+    return this.usernameInput.value.trim();
   }
 
   /**
-   * Clear new contact input
+   * Set username input value
    */
-  clearNewContactInput(): void {
-    this.newContactIDInput.value = '';
+  setUsernameInputValue(username: string): void {
+    this.usernameInput.value = username;
   }
 
   /**
-   * Setup add contact listener
+   * Setup set username listener
    */
-  onAddContact(handler: () => void): void {
-    this.addContactBtn.addEventListener('click', handler);
+  onSetUsername(handler: () => void): void {
+    this.setUsernameBtn.addEventListener('click', handler);
     
-    this.newContactIDInput.addEventListener('keypress', (e) => {
+    this.usernameInput.addEventListener('keypress', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         handler();
@@ -101,9 +101,30 @@ export class ContactListUI {
   }
 
   /**
-   * Setup copy ID listener
+   * Get find username input value
    */
-  onCopyID(handler: () => void): void {
-    this.copyBtn.addEventListener('click', handler);
+  getFindUsernameInput(): string {
+    return this.findUsernameInput.value.trim();
+  }
+
+  /**
+   * Clear find username input
+   */
+  clearFindUsernameInput(): void {
+    this.findUsernameInput.value = '';
+  }
+
+  /**
+   * Setup find user listener
+   */
+  onFindUser(handler: () => void): void {
+    this.findUserBtn.addEventListener('click', handler);
+    
+    this.findUsernameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handler();
+      }
+    });
   }
 }

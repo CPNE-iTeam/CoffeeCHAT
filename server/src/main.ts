@@ -118,8 +118,7 @@ wss.on('connection', (ws: CustomWebSocket) => {
         }
 
         const messageType = messageObj.type;
-        
-        // Route message to appropriate handler
+          // Route message to appropriate handler
         switch (messageType) {
             case 'publickey':
                 handlePublicKey(ws, messageObj);
@@ -131,6 +130,14 @@ wss.on('connection', (ws: CustomWebSocket) => {
 
             case 'chatmessage':
                 handleChatMessage(ws, messageObj);
+                break;
+
+            case 'setusername':
+                handleSetUsername(ws, messageObj);
+                break;
+
+            case 'finduser':
+                handleFindUser(ws, messageObj);
                 break;
 
             default:
@@ -227,6 +234,47 @@ function sendError(ws: CustomWebSocket, message: string): void {
     ws.send(JSON.stringify({
         type: 'error',
         message
+    }));
+}
+
+/**
+ * Handle setting username hash (privacy-preserving - server never sees actual username)
+ */
+function handleSetUsername(ws: CustomWebSocket, message: ServerMessage): void {
+    if (!ws.userID) {
+        sendError(ws, 'User ID is missing');
+        return;
+    }
+
+    if (!MessageValidator.validateUsernameHash(message.usernameHash)) {
+        sendError(ws, 'Invalid username hash format');
+        return;
+    }
+
+    connectionManager.storeUsernameHash(ws.userID, message.usernameHash);
+    
+    // Confirm username hash was set
+    ws.send(JSON.stringify({
+        type: 'usernameSet',
+        usernameHash: message.usernameHash
+    }));
+}
+
+/**
+ * Handle finding user by username hash
+ */
+function handleFindUser(ws: CustomWebSocket, message: ServerMessage): void {
+    if (!MessageValidator.validateUsernameHash(message.usernameHash)) {
+        sendError(ws, 'Invalid username hash format');
+        return;
+    }
+
+    const userID = connectionManager.findUserByUsernameHash(message.usernameHash);
+    
+    ws.send(JSON.stringify({
+        type: 'userFound',
+        usernameHash: message.usernameHash,
+        userID: userID || null  // null if not found
     }));
 }
 

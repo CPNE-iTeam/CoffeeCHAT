@@ -7,6 +7,7 @@ import type { CustomWebSocket, ConnectionInfo } from '../types/index.js';
 export class ConnectionManager {
   private connections: Map<string, CustomWebSocket> = new Map();
   private connectionInfo: Map<string, ConnectionInfo> = new Map();
+  private usernameHashIndex: Map<string, string> = new Map(); // hash -> userID
 
   /**
    * Register a new connection
@@ -24,6 +25,12 @@ export class ConnectionManager {
    * Unregister connection
    */
   unregisterConnection(userID: string): void {
+    // Remove username hash from index
+    const info = this.connectionInfo.get(userID);
+    if (info?.usernameHash) {
+      this.usernameHashIndex.delete(info.usernameHash);
+    }
+    
     this.connections.delete(userID);
     this.connectionInfo.delete(userID);
   }
@@ -56,6 +63,39 @@ export class ConnectionManager {
   getPublicKey(userID: string): string | undefined {
     const conn = this.connections.get(userID);
     return conn?.publicKey;
+  }
+
+  /**
+   * Store username hash for user (server never sees the actual username)
+   */
+  storeUsernameHash(userID: string, usernameHash: string): void {
+    const conn = this.connections.get(userID);
+    if (conn) {
+      // Remove old hash from index if exists
+      if (conn.usernameHash) {
+        this.usernameHashIndex.delete(conn.usernameHash);
+      }
+      conn.usernameHash = usernameHash;
+    }
+    
+    const info = this.connectionInfo.get(userID);
+    if (info) {
+      // Remove old hash from index if exists
+      if (info.usernameHash) {
+        this.usernameHashIndex.delete(info.usernameHash);
+      }
+      info.usernameHash = usernameHash;
+    }
+    
+    // Add to index for lookup
+    this.usernameHashIndex.set(usernameHash, userID);
+  }
+
+  /**
+   * Find user ID by username hash
+   */
+  findUserByUsernameHash(usernameHash: string): string | undefined {
+    return this.usernameHashIndex.get(usernameHash);
   }
 
   /**

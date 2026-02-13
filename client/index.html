@@ -15,21 +15,20 @@
         <h1>☕ CoffeeCHAT</h1>
         <div class="status">
           <span id="status" class="disconnected">Connecting...</span>
-        </div>
-      </div>      <div class="my-id-section">
-        <label>Your ID:</label>
-        <div class="user-id-container">
-          <span id="myID" class="user-id">-</span>
-          <button id="copyBtn" class="copy-btn" title="Copy ID">📋</button>
+        </div>      </div>      <div class="my-id-section">
+        <label>Your Username:</label>
+        <div class="username-container">
+          <input type="text" id="usernameInput" class="username-input" placeholder="Set a username..." maxlength="32" />
+          <button id="setUsernameBtn" class="set-username-btn" title="Set Username">✓</button>
           <button id="privacyToggle" class="privacy-toggle" title="Toggle Privacy Mode">
             <span class="icon">🙈</span>
           </button>
         </div>
       </div>
 
-      <div class="add-contact-section">
-        <input type="text" id="newContactID" placeholder="Enter user ID" />
-        <button id="addContactBtn" title="Add Contact">➕</button>
+      <div class="find-user-section">
+        <input type="text" id="findUsernameInput" placeholder="Find by username..." />
+        <button id="findUserBtn" title="Find User">🔍</button>
       </div>
 
       <div class="contacts-header">

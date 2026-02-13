@@ -11,6 +11,7 @@ import { MessageService } from './services/MessageService';
 import { NotificationService } from './services/NotificationService';
 import { PrivacyModeService } from './services/PrivacyModeService';
 import { ImageService } from './services/ImageService';
+import { UsernameService } from './services/UsernameService';
 import { ChatUI } from './ui/ChatUI';
 import { ContactListUI } from './ui/ContactListUI';
 import type { ChatMessage, ContentType } from './types';
@@ -28,6 +29,7 @@ class CoffeeChatClient {
   private notificationService: NotificationService;
   private privacyModeService: PrivacyModeService;
   private imageService: ImageService;
+  private usernameService: UsernameService;
 
   // UI Components
   private chatUI: ChatUI;
@@ -42,6 +44,7 @@ class CoffeeChatClient {
     this.notificationService = new NotificationService();
     this.privacyModeService = new PrivacyModeService();
     this.imageService = new ImageService();
+    this.usernameService = new UsernameService();
 
     // Initialize UI components
     this.chatUI = new ChatUI();
@@ -101,14 +104,11 @@ class CoffeeChatClient {
     const wsURL = `wss://${wsHost}:${wsPort}`;
     
     this.wsService.connect(wsURL);
-  }
-
-  private async handleMessage(data: ChatMessage): Promise<void> {
+  }  private async handleMessage(data: ChatMessage): Promise<void> {
     switch (data.type) {
       case 'welcome':
         if (data.userID) {
           this.myID = data.userID;
-          this.chatUI.updateMyID(this.myID);
           
           // Send our public key to server
           this.wsService.send({
@@ -126,13 +126,21 @@ class CoffeeChatClient {
         await this.handlePublicKey(data);
         break;
 
+      case 'usernameSet':
+        this.chatUI.addSystemMessage('✅ Username set (hashed on your device)');
+        break;
+
+      case 'userFound':
+        this.handleUserFound(data);
+        break;
+
       case 'error':
         if (data.message) {
           this.chatUI.addSystemMessage(`Error: ${data.message}`);
         }
         break;
     }
-  }  private async handleChatMessage(data: ChatMessage): Promise<void> {
+  }private async handleChatMessage(data: ChatMessage): Promise<void> {
     if (!data.fromID || !data.encrypted) return;
 
     const senderID = data.fromID; // Capture for use in callback
@@ -206,9 +214,7 @@ class CoffeeChatClient {
     this.chatUI.onSendImage(() => this.sendImage());
 
     // Paste image handler (Ctrl+V)
-    this.chatUI.onPasteImage((file) => this.sendImageFromFile(file));
-
-    // Block contact handler
+    this.chatUI.onPasteImage((file) => this.sendImageFromFile(file));    // Block contact handler
     this.chatUI.onBlockContact(() => {
       const currentID = this.contactService.getCurrentContactID();
       if (currentID) {
@@ -216,15 +222,11 @@ class CoffeeChatClient {
       }
     });
 
-    // Add contact handler
-    this.contactListUI.onAddContact(() => this.addContact());
+    // Set username handler
+    this.contactListUI.onSetUsername(() => this.setUsername());
 
-    // Copy ID handler
-    this.contactListUI.onCopyID(() => {
-      navigator.clipboard.writeText(this.myID).then(() => {
-        this.chatUI.addSystemMessage('Your ID copied to clipboard');
-      });
-    });
+    // Find user handler
+    this.contactListUI.onFindUser(() => this.findUser());
 
     // Privacy mode toggle handler
     this.setupPrivacyMode();
@@ -270,12 +272,12 @@ class CoffeeChatClient {
       if (icon) icon.textContent = '🐵';
     }
   }
-
   private setupSecurityHandlers(): void {
     window.addEventListener('beforeunload', () => {
       this.messageService.clearCache();
       this.contactService.clear();
       this.chatUI.clearMessages();
+      this.usernameService.clear();
       this.myPublicKey = '';
       this.myFingerprint = '';
     });
@@ -285,33 +287,96 @@ class CoffeeChatClient {
         this.chatUI.clearMessageInput();
       }
     });
+  }  /**
+   * Set username - hashed client-side before sending to server
+   */
+  private async setUsername(): Promise<void> {
+    const username = this.contactListUI.getUsernameInput();
+
+    if (!username) {
+      this.chatUI.addSystemMessage('Please enter a username');
+      return;
+    }
+
+    if (username.length < 2 || username.length > 32) {
+      this.chatUI.addSystemMessage('Username must be 2-32 characters');
+      return;
+    }
+
+    try {
+      // Hash username client-side for privacy
+      const usernameHash = await this.usernameService.setUsername(username);
+      
+      // Send only the hash to server - server never sees actual username
+      this.wsService.send({
+        type: 'setusername',
+        usernameHash: usernameHash
+      });
+
+      this.chatUI.addSystemMessage(`🔐 Username "${username}" hashed and sent to server`);
+    } catch (error) {
+      this.chatUI.addSystemMessage('⚠️ Failed to set username');
+    }
   }
 
-  private addContact(): void {
-    const contactID = this.contactListUI.getNewContactInput();
+  /**
+   * Find user by username - username is hashed client-side before lookup
+   */
+  private async findUser(): Promise<void> {
+    const username = this.contactListUI.getFindUsernameInput();
 
-    if (!contactID) {
-      this.chatUI.addSystemMessage('Please enter a contact ID');
+    if (!username) {
+      this.chatUI.addSystemMessage('Please enter a username to find');
       return;
     }
 
-    if (contactID === this.myID) {
-      this.chatUI.addSystemMessage('Cannot add yourself as a contact');
-      return;
+    try {
+      // Hash the username we're searching for (same algorithm as setting)
+      const usernameHash = await this.usernameService.hashUsername(username);
+      
+      // Send hash to server for lookup - server never sees actual username
+      this.wsService.send({
+        type: 'finduser',
+        usernameHash: usernameHash
+      });
+
+      this.chatUI.addSystemMessage(`🔍 Searching for user "${username}"...`);
+    } catch (error) {
+      this.chatUI.addSystemMessage('⚠️ Failed to search for user');
     }
+  }
 
-    if (this.contactService.hasContact(contactID)) {
-      this.chatUI.addSystemMessage('Contact already exists');
-      return;
+  /**
+   * Handle user found response from server  /**
+   * Handle user found response from server
+   */
+  private handleUserFound(data: ChatMessage): void {
+    const searchedUsername = this.contactListUI.getFindUsernameInput();
+    
+    if (data.userID) {
+      this.chatUI.addSystemMessage(`✅ Found "${searchedUsername}"!`);
+      
+      // Auto-add as contact if not already added
+      if (!this.contactService.hasContact(data.userID) && data.userID !== this.myID) {
+        this.contactService.addContact(data.userID);
+        
+        // Store the username we searched for with this contact
+        this.contactService.updateContact(data.userID, { username: searchedUsername });
+        
+        this.contactService.setCurrentContact(data.userID);
+        this.contactListUI.clearFindUsernameInput();
+        
+        // Request key exchange
+        this.messageService.requestKeyExchange(data.userID, this.myPublicKey);
+        this.chatUI.addSystemMessage(`Added "${searchedUsername}" as contact. Requesting key exchange...`);
+      } else if (data.userID === this.myID) {
+        this.chatUI.addSystemMessage(`That's you!`);
+      } else {
+        this.chatUI.addSystemMessage(`"${searchedUsername}" is already in your contacts`);
+      }
+    } else {
+      this.chatUI.addSystemMessage('❌ User not found or not online');
     }
-
-    this.contactService.addContact(contactID);
-    this.contactService.setCurrentContact(contactID);
-    this.contactListUI.clearNewContactInput();
-
-    // Request key exchange
-    this.messageService.requestKeyExchange(contactID, this.myPublicKey);
-    this.chatUI.addSystemMessage(`Requesting key exchange with ${contactID}...`);
   }
 
   private switchToContact(contactID: string): void {

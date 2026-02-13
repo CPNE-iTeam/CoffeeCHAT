@@ -7,7 +7,6 @@ import { ImageService } from '../services/ImageService';
 
 export class ChatUI {
   private statusEl: HTMLElement;
-  private myIDEl: HTMLElement;
   private currentChatInfo: HTMLElement;
   private messagesContainer: HTMLElement;
   private messageInput: HTMLInputElement;
@@ -21,7 +20,6 @@ export class ChatUI {
 
   constructor() {
     this.statusEl = document.getElementById('status') as HTMLElement;
-    this.myIDEl = document.getElementById('myID') as HTMLElement;
     this.currentChatInfo = document.getElementById('currentChatInfo') as HTMLElement;
     this.messagesContainer = document.getElementById('messages') as HTMLElement;
     this.messageInput = document.getElementById('messageInput') as HTMLInputElement;
@@ -39,12 +37,6 @@ export class ChatUI {
     this.statusEl.className = isConnected ? 'status connected' : 'status disconnected';
   }
 
-  /**
-   * Update my user ID display
-   */
-  updateMyID(userID: string): void {
-    this.myIDEl.textContent = userID;
-  }
   /**
    * Update chat header
    */

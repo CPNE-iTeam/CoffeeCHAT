@@ -51,6 +51,18 @@ export class MessageValidator {
     if (typeof signature !== 'string') return false;
     return this.isValidBase64(signature);
   }
+
+  /**
+   * Validate username hash format (SHA-256 base64)
+   * The hash is computed client-side for privacy - server never sees the actual username
+   */
+  static validateUsernameHash(hash: unknown): hash is string {
+    if (typeof hash !== 'string') return false;
+    // SHA-256 produces 32 bytes = 44 base64 characters (with padding)
+    if (hash.length < 40 || hash.length > 50) return false;
+    return this.isValidBase64(hash);
+  }
+
   /**
    * Check if string is valid base64 (for small payloads like keys/signatures)
    */

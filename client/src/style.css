@@ -13,6 +13,7 @@
   --text-primary: #eee;
   --text-secondary: #a0a0a0;
   --success: #4ecca3;
+  --warning: #ffc107;
   --border: #2d2d44;
 }
 
@@ -113,55 +114,13 @@ h1 {
   font-weight: 600;
 }
 
-.user-id-container {
+.username-container {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: var(--bg-secondary);
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 2px solid var(--border);
 }
 
-.user-id {
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--success);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.copy-btn {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 16px;
-  padding: 4px 6px;
-  border-radius: 6px;
-  transition: background 0.2s;
-  flex-shrink: 0;
-}
-
-.copy-btn:hover {
-  background: var(--bg-tertiary);
-}
-
-.copy-btn:active {
-  transform: scale(0.95);
-}
-
-/* Add Contact Section */
-.add-contact-section {
-  padding: 16px 20px;
-  border-bottom: 2px solid var(--border);
-  display: flex;
-  gap: 8px;
-}
-
-#newContactID {
+.username-input {
   flex: 1;
   background: var(--bg-secondary);
   border: 2px solid var(--border);
@@ -172,17 +131,63 @@ h1 {
   transition: all 0.3s;
 }
 
-#newContactID:focus {
+.username-input:focus {
   outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(233, 69, 96, 0.1);
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px rgba(78, 204, 163, 0.1);
 }
 
-#newContactID::placeholder {
+.username-input::placeholder {
   color: var(--text-secondary);
 }
 
-#addContactBtn {
+.set-username-btn {
+  background: var(--success);
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.3s;
+  color: var(--bg-primary);
+  flex-shrink: 0;
+}
+
+.set-username-btn:hover {
+  background: #5fd4a8;
+  transform: scale(1.05);
+}
+
+/* Find User Section */
+.find-user-section {
+  padding: 12px 20px;
+  border-bottom: 2px solid var(--border);
+  display: flex;
+  gap: 8px;
+}
+
+#findUsernameInput {
+  flex: 1;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  transition: all 0.3s;
+}
+
+#findUsernameInput:focus {
+  outline: none;
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px rgba(255, 193, 7, 0.1);
+}
+
+#findUsernameInput::placeholder {
+  color: var(--text-secondary);
+}
+
+#findUserBtn {
   background: var(--bg-tertiary);
   border: 2px solid var(--border);
   border-radius: 8px;
@@ -193,10 +198,11 @@ h1 {
   color: var(--text-primary);
 }
 
-#addContactBtn:hover {
-  background: var(--accent);
-  border-color: var(--accent);
+#findUserBtn:hover {
+  background: var(--warning);
+  border-color: var(--warning);
   transform: scale(1.05);
+  color: var(--bg-primary);
 }
 
 #addContactBtn:active {

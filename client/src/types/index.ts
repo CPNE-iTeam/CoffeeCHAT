@@ -16,10 +16,12 @@ export interface ChatMessage {
   timestamp?: number;
   nonce?: string;
   contentType?: 'text' | 'image';  // Message content type
+  usernameHash?: string;  // Hashed username for privacy-preserving lookup
 }
 
 export interface Contact {
   id: string;
+  username?: string;  // Display name (optional)
   messages: Array<{
     content: string;
     fromID: string;
